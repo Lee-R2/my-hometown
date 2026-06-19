@@ -1,0 +1,11 @@
+[
+  ["open", "https://supabase.com/dashboard/sign-in"],
+  ["wait", "--load", "networkidle"],
+  ["snapshot", "-i"],
+  ["fill", "@e11", "lwy1123581321@gmail.com"],
+  ["fill", "@e14", "Liwenyuan23@"],
+  ["click", "@e13"],
+  ["wait", "--load", "networkidle"],
+  ["wait", "5000"],
+  ["snapshot", "-i"]
+]
