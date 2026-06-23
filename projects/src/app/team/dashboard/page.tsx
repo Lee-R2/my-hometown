@@ -534,25 +534,38 @@ export default function TeamDashboard() {
         ? `/api/themes?teamId=${teamObj.id}&createdByVolunteer=${teamObj.createdBy}`
         : `/api/themes?teamId=${teamObj.id}`;
       
+      // 修复：使用 Promise.allSettled 替代 Promise.all，任一 fetch 失败不会导致整体中断
+      const fetchSafe = async (url: string): Promise<Response> => {
+        try {
+          return await fetch(url);
+        } catch (err) {
+          console.error(`Fetch 失败 ${url}:`, err);
+          return new Response(JSON.stringify({ error: 'network_error' }), {
+            status: 503,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+      };
+
       const [themesRes, taskRes, unreadRes, completionsRes, siblingTeamsRes, pretestRes, membersRes, borrowRes, transferRes, teamInfoRes] = await Promise.all([
-        fetch(themesUrl),
-        fetch(`/api/team/current-task?teamId=${teamObj.id}`),
-        fetch(`/api/team/notifications/unread-count?teamId=${teamObj.id}`),
-        fetch(`/api/team/theme-completions?teamId=${teamObj.id}`),
+        fetchSafe(themesUrl),
+        fetchSafe(`/api/team/current-task?teamId=${teamObj.id}`),
+        fetchSafe(`/api/team/notifications/unread-count?teamId=${teamObj.id}`),
+        fetchSafe(`/api/team/theme-completions?teamId=${teamObj.id}`),
         // 获取同志愿者其他小队信息
-        teamObj.createdBy 
-          ? fetch(`/api/team/sibling-teams?teamId=${teamObj.id}&createdBy=${teamObj.createdBy}`)
+        teamObj.createdBy
+          ? fetchSafe(`/api/team/sibling-teams?teamId=${teamObj.id}&createdBy=${teamObj.createdBy}`)
           : Promise.resolve({ ok: true, json: () => Promise.resolve({ teams: [] }) } as Response),
         // 获取前测状态
-        fetch(`/api/team/pretest?teamId=${teamObj.id}`),
+        fetchSafe(`/api/team/pretest?teamId=${teamObj.id}`),
         // 获取成员列表
-        fetch(`/api/teams/${teamObj.id}/members`),
+        fetchSafe(`/api/teams/${teamObj.id}/members`),
         // 获取借积分待处理数量
-        fetch(`/api/team/borrow/history?team_id=${teamObj.id}`),
+        fetchSafe(`/api/team/borrow/history?team_id=${teamObj.id}`),
         // 获取收到的赠送积分数量
-        fetch(`/api/team/transfer/history?team_id=${teamObj.id}&type=received&limit=50`),
+        fetchSafe(`/api/team/transfer/history?team_id=${teamObj.id}&type=received&limit=50`),
         // 获取最新小队基本信息（name, slogan, rules 等）
-        fetch(`/api/teams/${teamObj.id}`),
+        fetchSafe(`/api/teams/${teamObj.id}`),
       ]);
 
       // 检查响应是否有效并解析JSON

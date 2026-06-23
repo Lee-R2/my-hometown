@@ -186,8 +186,21 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
         .select('id');
 
       if (pointsError || !updatedTeam || updatedTeam.length === 0) {
+        // 安全修复：积分更新失败时回滚提交状态，避免数据不一致
+        await client
+          .from('task_submissions')
+          .update({
+            status: 'pending',
+            rating: null,
+            review_comment: null,
+            reviewer_id: null,
+            reviewed_at: null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', id);
+        console.error('[审核API] 积分更新失败，已回滚提交状态:', { submissionId: id, teamId: submission.team_id });
         return NextResponse.json(
-          { success: false, error: '积分更新冲突，请重试' },
+          { success: false, error: '积分更新冲突，提交状态已回滚，请重试' },
           { status: 409 }
         );
       }

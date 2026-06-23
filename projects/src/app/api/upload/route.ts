@@ -56,10 +56,12 @@ export async function POST(request: NextRequest) {
     const fileBuffer = Buffer.from(arrayBuffer);
 
     // 生成文件名
+    // 安全修复：清理文件名中的特殊字符，防止路径遍历
     const ext = file.name.split('.').pop() || (isVideo ? 'mp4' : 'jpg');
     const timestamp = Date.now();
     const folder = isVideo ? 'videos' : 'tools';
-    const fileName = `${folder}/${file.name.replace(/\.[^/.]+$/, '')}_${timestamp}.${ext}`;
+    const safeBaseName = file.name.replace(/\.[^/.]+$/, '').replace(/[\\/:*?"<>|]/g, '_').replace(/\.\./g, '_');
+    const fileName = `${folder}/${safeBaseName}_${timestamp}.${ext}`;
 
     // 上传到对象存储
     const fileKey = await uploadFile({

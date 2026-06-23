@@ -150,9 +150,14 @@ export async function POST(request: NextRequest) {
 
 /**
  * 查询现有数据
+ * 安全修复：添加管理员鉴权
  */
 export async function GET(request: NextRequest) {
   try {
+    // 安全修复：强制管理员鉴权
+    const auth = requireAdmin(request);
+    if (!auth.authenticated) return authError(auth);
+
     const client = getSupabaseClient();
 
     const { data: users, error: usersError } = await client

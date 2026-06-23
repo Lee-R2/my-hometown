@@ -72,9 +72,8 @@ export async function POST(request: NextRequest) {
       return ApiErrors.forbidden('账号已被禁用，请联系管理员');
     }
 
-    // 验证密码
-    const isValidPassword = password === parent.password || 
-      (parent.password && await verifyPassword(password, parent.password));
+    // 验证密码（安全修复：移除明文比对，仅使用哈希验证）
+    const isValidPassword = parent.password && await verifyPassword(password, parent.password);
 
     if (!isValidPassword) {
       return NextResponse.json(
@@ -217,11 +216,13 @@ export async function PUT(request: NextRequest) {
     }
 
     // 创建新账号，直接通过审核
+    // 安全修复：密码哈希后存储
+    const hashedPassword = hashPassword(password);
     const { data: newParent, error } = await supabase
       .from('parents')
       .insert({
         phone,
-        password,
+        password: hashedPassword,
         name,
         school_id: school_id || null,
         school_name: school_name || null,

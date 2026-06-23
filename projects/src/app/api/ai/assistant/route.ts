@@ -44,13 +44,53 @@ export async function POST(request: NextRequest) {
       imageCount: images?.length || 0,
       hasHistory: !!history,
       sessionId: clientSessionId,
-      pageContextType: pageContext?.type
+      pageContextType: pageContext?.type,
+      authRole: auth.payload?.role,
+      authUserId: auth.payload?.userId,
     });
 
-    // 放宽条件：只要有 teamId 就可以处理
     if (!teamId) {
       return ApiErrors.validation('缺少teamId参数');
     }
+
+    // 安全修复：teamId 归属校验，防止横向越权
+    const authRole = auth.payload?.role;
+    const authUserId = auth.payload?.userId;
+
+    if (authRole === 'team') {
+      // team 身份只能访问自己的小队
+      if (teamId !== authUserId) {
+        return ApiErrors.forbidden('无权访问其他小队的数据');
+      }
+    } else if (authRole === 'volunteer') {
+      // volunteer 身份需校验是否为该小队的指导志愿者
+      const client = getSupabaseClient();
+      const { data: team, error: teamError } = await client
+        .from('teams')
+        .select('assigned_volunteer_id')
+        .eq('id', teamId)
+        .single();
+      if (teamError || !team) {
+        return ApiErrors.notFound('小队不存在');
+      }
+      if (team.assigned_volunteer_id !== authUserId) {
+        return ApiErrors.forbidden('无权访问未指导的小队');
+      }
+    } else if (authRole === 'parent') {
+      // parent 身份需校验是否关注了该小队
+      const client = getSupabaseClient();
+      const { data: follow } = await client
+        .from('parent_team_follows')
+        .select('id')
+        .eq('parent_id', authUserId)
+        .eq('team_id', teamId)
+        .eq('is_active', true)
+        .maybeSingle();
+      if (!follow) {
+        return ApiErrors.forbidden('未关注该小队，无权访问');
+      }
+    }
+    // super_admin / teacher 不做额外限制（teacher 可查看本校小队，由前端控制）
 
     // 如果没有消息也没有图片，返回提示
     if ((!message || !message.trim()) && (!images || images.length === 0)) {

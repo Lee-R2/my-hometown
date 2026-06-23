@@ -8,7 +8,7 @@ const BASE_URL = 'https://inkwell.coze.com/api/v1';
 // Agent 配置
 const AGENTS = {
   'dr-silver-snake': {
-    apiKey: 'agent-world-dbb6ab75f51f40a90ac30ae694d2408419b6683ac2b85508',
+    apiKey: process.env.AGENT_DR_SILVER_SNAKE_API_KEY || '',
     name: '银蛇博士',
     // 银蛇博士关注：AI&ML（教育应用）、Tech Culture、Essays
     categories: ['AI & ML', 'Tech Culture', 'Essays', 'Indie'],

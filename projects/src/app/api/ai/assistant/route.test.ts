@@ -198,19 +198,19 @@ describe('POST /api/ai/assistant — 参数验证', () => {
   });
 
   it('有 teamId 但 message 和 images 都为空 → 返回 400', async () => {
-    const token = generateToken('team-001', 'team');
+    const token = generateToken('t1', 'team');
     const req = makeAuthRequest({ teamId: 't1' }, token);
     const res = await POST(req);
     expect(res.status).toBe(400);
     const body = await res.json();
-    // 错误消息应包含"问题"或"图片"之一
+    // 错误消息应包括"问题"或"图片"之一
     expect(
       body.error.includes('问题') || body.error.includes('图片')
     ).toBe(true);
   });
 
   it('有 teamId 且 message 为纯空格 → 返回 400', async () => {
-    const token = generateToken('team-001', 'team');
+    const token = generateToken('t1', 'team');
     const req = makeAuthRequest({ teamId: 't1', message: '   ' }, token);
     const res = await POST(req);
     expect(res.status).toBe(400);
@@ -246,7 +246,7 @@ describe('POST /api/ai/assistant — 正常流程（SSE 流式响应）', () => 
   });
 
   it('完整请求 → 返回 200 且 Content-Type 为 text/event-stream', async () => {
-    const token = generateToken('team-001', 'team');
+    const token = generateToken('t1', 'team');
     const req = makeAuthRequest(
       { teamId: 't1', message: '你好，银蛇博士' },
       token
@@ -257,7 +257,7 @@ describe('POST /api/ai/assistant — 正常流程（SSE 流式响应）', () => 
   });
 
   it('SSE 流包含 AI 回复内容和 [DONE] 结束标记', async () => {
-    const token = generateToken('team-001', 'team');
+    const token = generateToken('t1', 'team');
     const req = makeAuthRequest(
       { teamId: 't1', message: '你好，银蛇博士' },
       token
@@ -278,7 +278,7 @@ describe('POST /api/ai/assistant — 正常流程（SSE 流式响应）', () => 
   });
 
   it('SSE 流包含 usage_stats 元数据', async () => {
-    const token = generateToken('team-001', 'team');
+    const token = generateToken('t1', 'team');
     const req = makeAuthRequest(
       { teamId: 't1', message: '你好，银蛇博士' },
       token

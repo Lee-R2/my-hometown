@@ -78,10 +78,12 @@ export async function POST(request: NextRequest) {
     }
 
     // 存储路径：submissions/小队ID/时间戳_原文件名.扩展名
+    // 安全修复：清理文件名中的特殊字符，防止路径遍历
     const timestamp = Date.now();
-    const storageFileName = teamId 
-      ? `submissions/${teamId}/${timestamp}_${file.name}`
-      : `submissions/${timestamp}_${file.name}`;
+    const safeFileName = file.name.replace(/[\\/:*?"<>|]/g, '_').replace(/\.\./g, '_');
+    const storageFileName = teamId
+      ? `submissions/${teamId}/${timestamp}_${safeFileName}`
+      : `submissions/${timestamp}_${safeFileName}`;
 
     // 上传到对象存储
     const fileKey = await uploadFile({

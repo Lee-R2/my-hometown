@@ -222,9 +222,12 @@ export async function createStreamResponse(ctx: StreamHandlerContext): Promise<R
           })}\n\n`));
 
           try {
-            const baseUrl = process.env.DEPLOY_RUN_PORT
-              ? `http://localhost:${process.env.DEPLOY_RUN_PORT}`
-              : 'http://localhost:5000';
+            // 修复：使用环境变量构造 baseUrl，兼容生产环境部署
+            const baseUrl = process.env.NEXT_PUBLIC_BASE_URL ||
+              process.env.VERCEL_URL ||
+              (process.env.DEPLOY_RUN_PORT
+                ? `http://localhost:${process.env.DEPLOY_RUN_PORT}`
+                : 'http://localhost:5000');
 
             const imageResponse = await fetch(`${baseUrl}/api/ai/yinhe-image`, {
               method: 'POST',
@@ -263,9 +266,12 @@ export async function createStreamResponse(ctx: StreamHandlerContext): Promise<R
           })}\n\n`));
 
           try {
-            const baseUrl = process.env.DEPLOY_RUN_PORT
-              ? `http://localhost:${process.env.DEPLOY_RUN_PORT}`
-              : 'http://localhost:5000';
+            // 修复：使用环境变量构造 baseUrl，兼容生产环境部署
+            const baseUrl = process.env.NEXT_PUBLIC_BASE_URL ||
+              process.env.VERCEL_URL ||
+              (process.env.DEPLOY_RUN_PORT
+                ? `http://localhost:${process.env.DEPLOY_RUN_PORT}`
+                : 'http://localhost:5000');
 
             const videoResponse = await fetch(`${baseUrl}/api/ai/yinhe-video`, {
               method: 'POST',

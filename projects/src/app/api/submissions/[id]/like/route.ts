@@ -148,6 +148,29 @@ export async function POST(
       return ApiErrors.validation('不能给自己点赞');
     }
 
+    // 安全修复：校验 fromTeamId 归属，防止冒充其他小队点赞盗刷积分
+    const authRole = auth.payload?.role;
+    const authUserId = auth.payload?.userId;
+
+    if (authRole === 'team') {
+      // team 身份只能用自己的 teamId 发起点赞
+      if (fromTeamId !== authUserId) {
+        return ApiErrors.forbidden('无权冒充其他小队发起点赞');
+      }
+    }
+    // super_admin / volunteer / teacher 可代为操作，但需记录日志
+    if (authRole !== 'team' && authRole !== 'super_admin' && authRole !== 'volunteer' && authRole !== 'teacher') {
+      return ApiErrors.forbidden('无权执行点赞操作');
+    }
+
+    console.log('[点赞API] 操作记录:', {
+      fromTeamId,
+      toTeamId,
+      submissionId,
+      operatorRole: authRole,
+      operatorId: authUserId,
+    });
+
     const client = getSupabaseClient();
 
     // 验证提交记录是否存在

@@ -10,9 +10,41 @@ export async function POST(request: NextRequest) {
 
   try {
     const { url } = await request.json();
-    
+
     if (!url) {
       return ApiErrors.validation('URL is required');
+    }
+
+    // 安全修复：SSRF 防护 - 校验 URL 合法性
+    let parsedUrl: URL;
+    try {
+      parsedUrl = new URL(url);
+    } catch {
+      return ApiErrors.validation('Invalid URL format');
+    }
+
+    // 仅允许 http/https 协议
+    if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+      return ApiErrors.validation('Only http/https protocols are allowed');
+    }
+
+    // 拒绝内网 IP 和元数据接口
+    const hostname = parsedUrl.hostname.toLowerCase();
+    const blockedPatterns = [
+      /^127\./,                          // 本地回环
+      /^10\./,                           // A 类内网
+      /^172\.(1[6-9]|2[0-9]|3[01])\./,  // B 类内网
+      /^192\.168\./,                     // C 类内网
+      /^169\.254\./,                     // 链路本地（含云元数据）
+      /^::1$/,                           // IPv6 回环
+      /^fc[0-9a-f]{2}:/i,                // IPv6 唯一本地
+      /^fe80:/i,                         // IPv6 链路本地
+      /^0\./,                            // 0.0.0.0
+      /^localhost$/i,                    // localhost
+    ];
+
+    if (blockedPatterns.some(pattern => pattern.test(hostname))) {
+      return ApiErrors.validation('Access to internal network resources is forbidden');
     }
 
     const customHeaders = HeaderUtils.extractForwardHeaders(request.headers);

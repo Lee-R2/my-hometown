@@ -47,7 +47,7 @@ export async function GET(request: NextRequest) {
     try {
       const { data: teams, error: teamsError } = await client
         .from('teams')
-        .select('id, code, name, password, is_active')
+        .select('id, code, name, is_active')
         .limit(5);
 
       if (teamsError) {

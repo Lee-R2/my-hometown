@@ -127,11 +127,13 @@ export async function POST(request: NextRequest) {
     }
 
     // 1. 扣除转出小队积分和增加碎片（乐观锁，检查影响行数防止并发双花）
+    // 修复：乐观锁同时校验 points 和 heart_shards，防止碎片并发问题
     const { data: deductedFrom, error: deductError } = await supabase
       .from('teams')
       .update(updateData)
       .eq('id', from_team_id)
       .eq('points', fromTeam.points) // 乐观锁，防止并发问题
+      .eq('heart_shards', fromTeam.heart_shards || 0) // 修复：同时校验碎片
       .select('id');
 
     if (deductError || !deductedFrom || deductedFrom.length === 0) {

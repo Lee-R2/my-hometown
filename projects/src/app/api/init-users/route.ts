@@ -6,6 +6,7 @@ import { ApiErrors } from '@/lib/api-error';
 
 /**
  * 用户数据查询和初始化 API
+ * 安全修复：所有接口均需管理员鉴权
  */
 
 /**
@@ -13,6 +14,10 @@ import { ApiErrors } from '@/lib/api-error';
  */
 export async function GET(request: NextRequest) {
   try {
+    // 安全修复：强制管理员鉴权
+    const auth = requireAdmin(request);
+    if (!auth.authenticated) return authError(auth);
+
     const client = getSupabaseClient();
     const { data: users, error } = await client
       .from('users')
@@ -23,38 +28,10 @@ export async function GET(request: NextRequest) {
       throw error;
     }
 
-    if (!users || users.length === 0) {
-      const defaultUsers = [
-        { username: 'admin', password: hashPassword('123456'), name: '超级管理员', role: 'super_admin', is_active: true },
-        { username: 'teacher1', password: hashPassword('123456'), name: '张老师', role: 'teacher', is_active: true },
-        { username: 'teacher2', password: hashPassword('123456'), name: '李老师', role: 'teacher', is_active: true },
-        { username: 'volunteer1', password: hashPassword('123456'), name: '王志愿者', role: 'volunteer', is_active: true },
-        { username: 'volunteer2', password: hashPassword('123456'), name: '赵志愿者', role: 'volunteer', is_active: true },
-      ];
-
-      let created = 0;
-      for (const u of defaultUsers) {
-        const { error: insertError } = await client.from('users').insert(u);
-        if (!insertError) created++;
-      }
-
-      const { data: newUsers } = await client
-        .from('users')
-        .select('id, username, name, role, is_active')
-        .order('created_at', { ascending: true });
-
-      return NextResponse.json({
-        success: true,
-        message: `已自动创建${created} 个用户`,
-        count: newUsers?.length || 0,
-        users: newUsers || [],
-      });
-    }
-
     return NextResponse.json({
       success: true,
-      count: users.length,
-      users: users,
+      count: users?.length || 0,
+      users: users || [],
     });
   } catch (error) {
     console.error('查询用户列表错误:', error);
@@ -64,24 +41,15 @@ export async function GET(request: NextRequest) {
 
 /**
  * 初始化测试用户数据
+ * 安全修复：无条件要求管理员鉴权
  */
 export async function POST(request: NextRequest) {
   try {
+    // 安全修复：无条件要求管理员鉴权，不再根据用户表是否为空绕过
+    const auth = requireAdmin(request);
+    if (!auth.authenticated) return authError(auth);
+
     const client = getSupabaseClient();
-
-    const { data: existingUsers, error: checkError } = await client
-      .from('users')
-      .select('id')
-      .limit(1);
-
-    if (checkError) {
-      throw checkError;
-    }
-
-    if (existingUsers && existingUsers.length > 0) {
-      const auth = requireAdmin(request);
-      if (!auth.authenticated) return authError(auth);
-    }
 
     // 默认测试用户
     const defaultUsers = [
