@@ -1422,6 +1422,15 @@ export default function TeamDashboard() {
                     <p className="text-sm font-medium">消息中心</p>
                     {unreadCount > 0 && <p className="text-xs text-red-500">{unreadCount}条未读</p>}
                   </div>
+                  <div
+                    className="flex flex-col items-center p-3 bg-sky-50 rounded-xl cursor-pointer hover:bg-sky-100 transition-colors"
+                    onClick={() => navigate("/team/market")}
+                  >
+                    <div className="w-10 h-10 bg-sky-100 rounded-xl flex items-center justify-center mb-2">
+                      <ShoppingCart className="w-5 h-5 text-sky-600" />
+                    </div>
+                    <p className="text-sm font-medium">云朵市集</p>
+                  </div>
                 </div>
               </CardContent>
             </Card>
