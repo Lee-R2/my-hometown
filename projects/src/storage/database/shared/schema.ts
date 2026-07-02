@@ -49,6 +49,7 @@ export const taskSubmissions = pgTable("task_submissions", {
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }),
 	rating: varchar({ length: 20 }),
+	sourceTradeId: varchar("source_trade_id", { length: 36 }), // 云朵市集交易复制来源
 });
 
 export const taskThemes = pgTable("task_themes", {
@@ -237,6 +238,19 @@ export const teams = pgTable("teams", {
 	grade: varchar({ length: 20 }),
 	teacherId: varchar("teacher_id", { length: 36 }),
 	createdBy: varchar("created_by", { length: 36 }),
+	// 以下为代码中使用但原 schema 缺失的字段
+	isActive: boolean("is_active").default(true),
+	lastLoginAt: timestamp("last_login_at", { withTimezone: true, mode: 'string' }),
+	lastLoginIp: text("last_login_ip"),
+	assignedVolunteerId: varchar("assigned_volunteer_id", { length: 36 }),
+	cycle: integer().default(1),
+	hasCompletedPretest: boolean("has_completed_pretest").default(false),
+	heartShards: integer("heart_shards").default(0),
+	heartGems: integer("heart_gems").default(0),
+	icon: varchar({ length: 255 }),
+	description: text(),
+	nextTaskDeadline: timestamp("next_task_deadline", { withTimezone: true, mode: 'string' }),
+	preferredDifficulty: varchar("preferred_difficulty", { length: 20 }),
 }, (table) => [
 	unique("teams_code_unique").on(table.code),
 ]);
@@ -406,4 +420,355 @@ export const teamTools = pgTable("team_tools", {
 			name: "team_tools_tool_id_fkey"
 		}).onDelete("cascade"),
 	unique("team_tools_team_id_task_id_tool_id_key").on(table.teamId, table.taskId, table.toolId),
+]);
+
+// ============================================
+// 以下为代码中使用但原 schema 缺失的表定义
+// ============================================
+
+// 积分借贷表
+export const pointBorrows = pgTable("point_borrows", {
+	id: varchar({ length: 36 }).default(gen_random_uuid).primaryKey().notNull(),
+	borrowerId: varchar("borrower_id", { length: 36 }).notNull(),
+	lenderId: varchar("lender_id", { length: 36 }).notNull(),
+	points: integer().notNull(),
+	interestRate: varchar("interest_rate", { length: 10 }).default('0'),
+	overdueInterestRate: varchar("overdue_interest_rate", { length: 10 }).default('0'),
+	repayDate: timestamp("repay_date", { withTimezone: true, mode: 'string' }),
+	status: varchar({ length: 20 }).default('pending'), // pending, approved, rejected, repaid, overdue, partial_repaid
+	message: text(),
+	rejectionReason: text("rejection_reason"),
+	requestedAt: timestamp("requested_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	approvedAt: timestamp("approved_at", { withTimezone: true, mode: 'string' }),
+	repaidAt: timestamp("repaid_at", { withTimezone: true, mode: 'string' }),
+	actualPoints: integer("actual_points").default(0),
+	unpaidPoints: integer("unpaid_points").default(0),
+	autoRepaid: boolean("auto_repaid").default(false),
+}, (table) => [
+	index("idx_point_borrows_borrower_id").using("btree", table.borrowerId.asc().nullsLast().op("text_ops")),
+	index("idx_point_borrows_lender_id").using("btree", table.lenderId.asc().nullsLast().op("text_ops")),
+	index("idx_point_borrows_status").using("btree", table.status.asc().nullsLast().op("text_ops")),
+]);
+
+// 积分交易记录表
+export const pointTransactions = pgTable("point_transactions", {
+	id: varchar({ length: 36 }).default(gen_random_uuid).primaryKey().notNull(),
+	teamId: varchar("team_id", { length: 36 }),
+	fromTeamId: varchar("from_team_id", { length: 36 }),
+	toTeamId: varchar("to_team_id", { length: 36 }),
+	relatedId: varchar("related_id", { length: 36 }),
+	points: integer().notNull(),
+	type: varchar({ length: 20 }),
+	changeType: varchar("change_type", { length: 30 }).notNull(),
+	description: text(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("idx_point_transactions_team_id").using("btree", table.teamId.asc().nullsLast().op("text_ops")),
+	index("idx_point_transactions_change_type").using("btree", table.changeType.asc().nullsLast().op("text_ops")),
+]);
+
+// 小队主题选择表
+export const teamThemeSelections = pgTable("team_theme_selections", {
+	id: varchar({ length: 36 }).default(gen_random_uuid).primaryKey().notNull(),
+	teamId: varchar("team_id", { length: 36 }).notNull(),
+	themeId: varchar("theme_id", { length: 36 }).notNull(),
+	status: varchar({ length: 20 }).default('in_progress'), // in_progress, completed, abandoned
+	cycle: integer().default(1),
+	selectedAt: timestamp("selected_at", { withTimezone: true, mode: 'string' }).defaultNow(),
+	completedAt: timestamp("completed_at", { withTimezone: true, mode: 'string' }),
+}, (table) => [
+	index("idx_team_theme_selections_team_id").using("btree", table.teamId.asc().nullsLast().op("text_ops")),
+	index("idx_team_theme_selections_theme_id").using("btree", table.themeId.asc().nullsLast().op("text_ops")),
+]);
+
+// 黑板报帖子表
+export const blackboardPosts = pgTable("blackboard_posts", {
+	id: varchar({ length: 36 }).default(gen_random_uuid).primaryKey().notNull(),
+	teamId: varchar("team_id", { length: 36 }).notNull(),
+	themeId: varchar("theme_id", { length: 36 }),
+	title: varchar({ length: 200 }).notNull(),
+	content: text().notNull(),
+	imagesUrl: jsonb("images_url"),
+	status: varchar({ length: 20 }).default('pending'), // pending, approved, rejected
+	rejectionReason: text("rejection_reason"),
+	likesCount: integer("likes_count").default(0),
+	commentsCount: integer("comments_count").default(0),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }),
+}, (table) => [
+	index("idx_blackboard_posts_team_id").using("btree", table.teamId.asc().nullsLast().op("text_ops")),
+	index("idx_blackboard_posts_theme_id").using("btree", table.themeId.asc().nullsLast().op("text_ops")),
+	index("idx_blackboard_posts_status").using("btree", table.status.asc().nullsLast().op("text_ops")),
+]);
+
+// 黑板报评论表
+export const blackboardComments = pgTable("blackboard_comments", {
+	id: varchar({ length: 36 }).default(gen_random_uuid).primaryKey().notNull(),
+	postId: varchar("post_id", { length: 36 }).notNull(),
+	teamId: varchar("team_id", { length: 36 }).notNull(),
+	content: text().notNull(),
+	likesCount: integer("likes_count").default(0),
+	status: varchar({ length: 20 }).default('approved'),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("idx_blackboard_comments_post_id").using("btree", table.postId.asc().nullsLast().op("text_ops")),
+	index("idx_blackboard_comments_team_id").using("btree", table.teamId.asc().nullsLast().op("text_ops")),
+]);
+
+// 黑板报点赞表
+export const blackboardLikes = pgTable("blackboard_likes", {
+	id: varchar({ length: 36 }).default(gen_random_uuid).primaryKey().notNull(),
+	postId: varchar("post_id", { length: 36 }).notNull(),
+	teamId: varchar("team_id", { length: 36 }).notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	unique("blackboard_likes_post_id_team_id_key").on(table.postId, table.teamId),
+]);
+
+// 用户会话表
+export const userSessions = pgTable("user_sessions", {
+	id: varchar({ length: 36 }).default(gen_random_uuid).primaryKey().notNull(),
+	userId: text("user_id").notNull(),
+	token: text().notNull(),
+	csrfToken: text("csrf_token").notNull(),
+	ipAddress: text("ip_address"),
+	userAgent: text("user_agent"),
+	isActive: boolean("is_active").default(true),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow(),
+	expiresAt: timestamp("expires_at", { withTimezone: true, mode: 'string' }).notNull(),
+}, (table) => [
+	unique("user_sessions_token_unique").on(table.token),
+]);
+
+// 家长账号表
+export const parentAccounts = pgTable("parent_accounts", {
+	id: varchar({ length: 36 }).default(gen_random_uuid).primaryKey().notNull(),
+	phone: varchar({ length: 20 }).notNull(),
+	password: varchar({ length: 255 }).notNull(),
+	name: varchar({ length: 100 }),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }),
+}, (table) => [
+	unique("parent_accounts_phone_unique").on(table.phone),
+]);
+
+// 家长-小队关联表
+export const parentTeamRelations = pgTable("parent_team_relations", {
+	id: varchar({ length: 36 }).default(gen_random_uuid).primaryKey().notNull(),
+	parentId: varchar("parent_id", { length: 36 }).notNull(),
+	teamId: varchar("team_id", { length: 36 }).notNull(),
+	relation: varchar({ length: 20 }), // 父亲、母亲等
+	status: varchar({ length: 20 }).default('pending'), // pending, approved, rejected
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	approvedAt: timestamp("approved_at", { withTimezone: true, mode: 'string' }),
+}, (table) => [
+	index("idx_parent_team_relations_parent_id").using("btree", table.parentId.asc().nullsLast().op("text_ops")),
+	index("idx_parent_team_relations_team_id").using("btree", table.teamId.asc().nullsLast().op("text_ops")),
+]);
+
+// 智能体会话表
+export const agentSessions = pgTable("agent_sessions", {
+	id: varchar({ length: 36 }).default(gen_random_uuid).primaryKey().notNull(),
+	teamId: varchar("team_id", { length: 36 }).notNull(),
+	agentType: varchar("agent_type", { length: 50 }).notNull(),
+	status: varchar({ length: 20 }).default('active'),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }),
+}, (table) => [
+	index("idx_agent_sessions_team_id").using("btree", table.teamId.asc().nullsLast().op("text_ops")),
+]);
+
+// 智能体对话表
+export const agentConversations = pgTable("agent_conversations", {
+	id: varchar({ length: 36 }).default(gen_random_uuid).primaryKey().notNull(),
+	sessionId: varchar("session_id", { length: 36 }).notNull(),
+	role: varchar({ length: 20 }).notNull(), // user, assistant, system
+	content: text().notNull(),
+	messageType: varchar("message_type", { length: 20 }).default('text'),
+	mediaUrl: varchar("media_url", { length: 500 }),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("idx_agent_conversations_session_id").using("btree", table.sessionId.asc().nullsLast().op("text_ops")),
+]);
+
+// 智能体记忆表
+export const agentMemories = pgTable("agent_memories", {
+	id: varchar({ length: 36 }).default(gen_random_uuid).primaryKey().notNull(),
+	teamId: varchar("team_id", { length: 36 }).notNull(),
+	agentType: varchar("agent_type", { length: 50 }).notNull(),
+	memoryType: varchar("memory_type", { length: 30 }),
+	content: text().notNull(),
+	importance: integer().default(0),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }),
+}, (table) => [
+	index("idx_agent_memories_team_id").using("btree", table.teamId.asc().nullsLast().op("text_ops")),
+]);
+
+// 小队活动日志表
+export const teamActivityLogs = pgTable("team_activity_logs", {
+	id: varchar({ length: 36 }).default(gen_random_uuid).primaryKey().notNull(),
+	teamId: varchar("team_id", { length: 36 }).notNull(),
+	action: varchar({ length: 50 }).notNull(),
+	details: jsonb(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("idx_team_activity_logs_team_id").using("btree", table.teamId.asc().nullsLast().op("text_ops")),
+]);
+
+// 最终任务表单表
+export const finalTaskForms = pgTable("final_task_forms", {
+	id: varchar({ length: 36 }).default(gen_random_uuid).primaryKey().notNull(),
+	themeId: varchar("theme_id", { length: 36 }),
+	title: varchar({ length: 200 }).notNull(),
+	description: text(),
+	role: varchar({ length: 20 }), // guider, light_mage, secret_scholar
+	fields: jsonb().notNull(),
+	schoolId: varchar("school_id", { length: 36 }),
+	isGlobal: boolean("is_global").default(true),
+	isActive: boolean("is_active").default(true),
+	icon: varchar({ length: 10 }).default('🏆'),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }),
+});
+
+// 最终任务提交表
+export const finalTaskSubmissions = pgTable("final_task_submissions", {
+	id: varchar({ length: 36 }).default(gen_random_uuid).primaryKey().notNull(),
+	teamId: varchar("team_id", { length: 36 }).notNull(),
+	taskId: varchar("task_id", { length: 36 }),
+	memberId: varchar("member_id", { length: 36 }),
+	memberRole: varchar("member_role", { length: 20 }),
+	formData: jsonb("form_data"),
+	cycle: integer().default(1),
+	status: varchar({ length: 20 }).default('pending'),
+	reviewComment: text("review_comment"),
+	reviewerId: varchar("reviewer_id", { length: 36 }),
+	reviewedAt: timestamp("reviewed_at", { withTimezone: true, mode: 'string' }),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }),
+}, (table) => [
+	index("idx_final_task_submissions_team_task").using("btree", table.teamId.asc().nullsLast().op("text_ops")),
+]);
+
+// 小队难度偏好表
+export const teamDifficultyPreferences = pgTable("team_difficulty_preferences", {
+	id: varchar({ length: 36 }).default(gen_random_uuid).primaryKey().notNull(),
+	teamId: varchar("team_id", { length: 36 }).notNull(),
+	preferredDifficulty: varchar("preferred_difficulty", { length: 20 }).notNull(),
+	cycle: integer().default(1),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }),
+}, (table) => [
+	unique("team_difficulty_preferences_team_id_cycle_key").on(table.teamId, table.cycle),
+]);
+
+// 小队预测试表
+export const teamPretests = pgTable("team_pretests", {
+	id: varchar({ length: 36 }).default(gen_random_uuid).primaryKey().notNull(),
+	teamId: varchar("team_id", { length: 36 }).notNull(),
+	cycle: integer().default(1),
+	score: integer().default(0),
+	answers: jsonb(),
+	completedAt: timestamp("completed_at", { withTimezone: true, mode: 'string' }),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	unique("team_pretests_team_id_cycle_key").on(table.teamId, table.cycle),
+]);
+
+// 爱心宝石表
+export const heartGems = pgTable("heart_gems", {
+	id: varchar({ length: 36 }).default(gen_random_uuid).primaryKey().notNull(),
+	teamId: varchar("team_id", { length: 36 }).notNull(),
+	amount: integer().default(0),
+	reason: varchar({ length: 200 }),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("idx_heart_gems_team_id").using("btree", table.teamId.asc().nullsLast().op("text_ops")),
+]);
+
+// 任务反馈知识库表
+export const taskFeedbackKnowledge = pgTable("task_feedback_knowledge", {
+	id: varchar({ length: 36 }).default(gen_random_uuid).primaryKey().notNull(),
+	taskId: varchar("task_id", { length: 36 }).notNull(),
+	themeId: varchar("theme_id", { length: 36 }),
+	keywords: text().notNull(),
+	feedback: text().notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+});
+
+// ===== 云朵市集 =====
+export const cloudMarketListings = pgTable("cloud_market_listings", {
+	id: varchar({ length: 36 }).default(gen_random_uuid).primaryKey().notNull(),
+	teamId: varchar("team_id", { length: 36 }).notNull(),
+	listingType: varchar("listing_type", { length: 20 }).notNull(),
+	itemType: varchar("item_type", { length: 20 }).notNull(),
+	itemRef: varchar("item_ref", { length: 36 }),
+	itemName: varchar("item_name", { length: 200 }).notNull(),
+	itemDescription: text("item_description"),
+	itemImageUrl: varchar("item_image_url", { length: 500 }),
+	quantity: integer().notNull().default(1),
+	availableQuantity: integer("available_quantity").notNull(),
+	price: integer(),
+	barterFor: jsonb("barter_for"),
+	scope: varchar({ length: 20 }).notNull(),
+	themeId: varchar("theme_id", { length: 36 }),
+	schoolId: varchar("school_id", { length: 36 }),
+	status: varchar({ length: 20 }).notNull().default('active'),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }),
+	expiresAt: timestamp("expires_at", { withTimezone: true, mode: 'string' }),
+}, (table) => [
+	index("idx_cloud_market_listings_team_id").using("btree", table.teamId.asc().nullsLast().op("text_ops")),
+	index("idx_cloud_market_listings_scope_theme").using("btree", table.scope.asc().nullsLast().op("text_ops"), table.themeId.asc().nullsLast().op("text_ops")),
+	index("idx_cloud_market_listings_scope_school").using("btree", table.scope.asc().nullsLast().op("text_ops"), table.schoolId.asc().nullsLast().op("text_ops")),
+	index("idx_cloud_market_listings_status").using("btree", table.status.asc().nullsLast().op("text_ops")),
+	index("idx_cloud_market_listings_item_type").using("btree", table.itemType.asc().nullsLast().op("text_ops")),
+]);
+
+export const cloudMarketOffers = pgTable("cloud_market_offers", {
+	id: varchar({ length: 36 }).default(gen_random_uuid).primaryKey().notNull(),
+	listingId: varchar("listing_id", { length: 36 }).notNull(),
+	fromTeamId: varchar("from_team_id", { length: 36 }).notNull(),
+	offerType: varchar("offer_type", { length: 20 }).notNull(),
+	offerPrice: integer("offer_price"),
+	offerItemType: varchar("offer_item_type", { length: 20 }),
+	offerItemRef: varchar("offer_item_ref", { length: 36 }),
+	offerItemName: varchar("offer_item_name", { length: 200 }),
+	offerQuantity: integer("offer_quantity").default(1),
+	status: varchar({ length: 20 }).notNull().default('pending'),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	respondedAt: timestamp("responded_at", { withTimezone: true, mode: 'string' }),
+}, (table) => [
+	index("idx_cloud_market_offers_listing_id").using("btree", table.listingId.asc().nullsLast().op("text_ops")),
+	index("idx_cloud_market_offers_from_team").using("btree", table.fromTeamId.asc().nullsLast().op("text_ops")),
+	index("idx_cloud_market_offers_status").using("btree", table.status.asc().nullsLast().op("text_ops")),
+]);
+
+export const cloudMarketTrades = pgTable("cloud_market_trades", {
+	id: varchar({ length: 36 }).default(gen_random_uuid).primaryKey().notNull(),
+	listingId: varchar("listing_id", { length: 36 }).notNull(),
+	buyerTeamId: varchar("buyer_team_id", { length: 36 }).notNull(),
+	sellerTeamId: varchar("seller_team_id", { length: 36 }).notNull(),
+	tradeType: varchar("trade_type", { length: 20 }).notNull(),
+	itemType: varchar("item_type", { length: 20 }).notNull(),
+	itemName: varchar("item_name", { length: 200 }).notNull(),
+	quantity: integer().notNull(),
+	pointsPaid: integer("points_paid").default(0),
+	barterItemType: varchar("barter_item_type", { length: 20 }),
+	barterItemName: varchar("barter_item_name", { length: 200 }),
+	barterQuantity: integer("barter_quantity"),
+	scope: varchar({ length: 20 }).notNull(),
+	themeId: varchar("theme_id", { length: 36 }),
+	schoolId: varchar("school_id", { length: 36 }),
+	offerId: varchar("offer_id", { length: 36 }),
+	status: varchar({ length: 20 }).notNull().default('completed'),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	completedAt: timestamp("completed_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("idx_cloud_market_trades_listing_id").using("btree", table.listingId.asc().nullsLast().op("text_ops")),
+	index("idx_cloud_market_trades_buyer").using("btree", table.buyerTeamId.asc().nullsLast().op("text_ops")),
+	index("idx_cloud_market_trades_seller").using("btree", table.sellerTeamId.asc().nullsLast().op("text_ops")),
+	index("idx_cloud_market_trades_scope").using("btree", table.scope.asc().nullsLast().op("text_ops"), table.themeId.asc().nullsLast().op("text_ops"), table.schoolId.asc().nullsLast().op("text_ops")),
+	index("idx_cloud_market_trades_created_at").using("btree", table.createdAt.asc().nullsLast().op("text_ops")),
 ]);
