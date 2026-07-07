@@ -66,6 +66,12 @@ export function DataSyncProvider({
       params.append('lastSync', lastSync.toString());
 
       const res = await fetch(`/api/sync?${params.toString()}`);
+      
+      // 检查 response.ok，避免 HTML 错误页导致 JSON 解析失败
+      if (!res.ok) {
+        return;
+      }
+      
       const data = await res.json();
 
       if (data.success) {
@@ -91,7 +97,8 @@ export function DataSyncProvider({
         }
       }
     } catch (error) {
-      console.error('同步失败:', error);
+      // 静默处理网络错误（热重载、离线、请求取消等），避免控制台刷屏
+      // 同步失败不影响主功能，下次定时器会重试
     } finally {
       setIsSyncing(false);
     }

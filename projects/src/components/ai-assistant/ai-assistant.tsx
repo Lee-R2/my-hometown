@@ -302,6 +302,7 @@ export default function AIAssistant({
       if (newSessionId && newSessionId !== sessionId) {
         console.log('[银蛇博士] 更新会话ID:', sessionId, '->', newSessionId);
         setSessionId(newSessionId);
+        sessionStorage.setItem(`yinshe_session_${teamId}`, newSessionId);
       }
 
       if (!response.ok) {

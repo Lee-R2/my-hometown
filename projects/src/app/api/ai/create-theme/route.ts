@@ -2,6 +2,7 @@ import { requireAdmin, authError, safeError } from '@/lib/api-auth';
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseClient } from '@/storage/database/supabase-client';
 import { ApiErrors } from '@/lib/api-error';
+import { checkAiRateLimit } from '@/lib/rate-limit';
 
 /**
  * POST /api/ai/create-theme
@@ -13,6 +14,14 @@ import { ApiErrors } from '@/lib/api-error';
 export async function POST(request: NextRequest) {
   const auth = requireAdmin(request);
   if (!auth.authenticated) return authError(auth);
+
+  const rateLimit = await checkAiRateLimit(request, auth.payload?.userId, 'ai_create_theme');
+  if (!rateLimit.allowed) {
+    return NextResponse.json(
+      { success: false, error: rateLimit.message },
+      { status: 429 }
+    );
+  }
 
   try {
     const body = await request.json();

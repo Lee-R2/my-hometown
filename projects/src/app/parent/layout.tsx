@@ -34,32 +34,11 @@ export default function ParentLayout({ children }: { children: React.ReactNode }
             id: parentData.id,
             name: parentData.name,
           }));
-        } else {
-          // API 认证失败，降级到 localStorage
-          try {
-            const stored = localStorage.getItem('parent');
-            if (stored) {
-              const parsed = JSON.parse(stored);
-              if (parsed?.id) {
-                setParent({ id: parsed.id, name: parsed.name || '' });
-                return;
-              }
-            }
-          } catch {}
-          // 家长端不强制跳转登录，只是不显示助手
         }
+        // API 认证失败时不显示助手（不降级到 localStorage，避免鉴权绕过）
       })
       .catch(() => {
-        // 网络错误时降级到 localStorage
-        try {
-          const stored = localStorage.getItem('parent');
-          if (stored) {
-            const parsed = JSON.parse(stored);
-            if (parsed?.id) {
-              setParent({ id: parsed.id, name: parsed.name || '' });
-            }
-          }
-        } catch {}
+        // 网络错误时不显示助手（不降级到 localStorage，避免鉴权绕过）
       });
   }, [pathname]);
 

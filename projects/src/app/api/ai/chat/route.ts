@@ -49,10 +49,27 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const { messages, assistantType, contextPrompt, teamId, userId, userRole, sessionId } = await request.json();
+    const { messages, assistantType, contextPrompt, teamId: bodyTeamId, sessionId } = await request.json();
+
+    // 强制使用 auth.payload 中的身份信息，忽略 body 中可能伪造的 userId/userRole
+    const userId = auth.payload!.userId;
+    const userRole = auth.payload!.role;
+    // teamId：team 角色强制用 auth.payload.userId，其他角色可用 bodyTeamId
+    const teamId = userRole === 'team' ? auth.payload!.userId : bodyTeamId;
 
     if (!messages || !Array.isArray(messages)) {
       return ApiErrors.validation('消息格式错误');
+    }
+
+    // 安全修复（P3 输入校验）：限制单条用户消息长度，避免超长输入消耗资源
+    const MAX_CHAT_MESSAGE_LENGTH = 4000;
+    for (const m of messages) {
+      if (m && typeof m === 'object' && m.role === 'user') {
+        const c = typeof m.content === 'string' ? m.content : String(m.content ?? '');
+        if (c.length > MAX_CHAT_MESSAGE_LENGTH) {
+          return ApiErrors.validation(`单条消息过长，最大支持 ${MAX_CHAT_MESSAGE_LENGTH} 字符`);
+        }
+      }
     }
 
     // 获取智能体信息
@@ -60,6 +77,16 @@ export async function POST(request: NextRequest) {
     if (!agentInfo) {
       return ApiErrors.validation('无效的助手类型');
     }
+
+    // 构造内部 API 调用所需的认证头，透传 Authorization 和 Cookie，
+    // 避免 stream-handler/commands 中的内部 fetch 因缺失认证被拦截。
+    const internalAuthHeaders: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    const authHeader = request.headers.get('authorization');
+    if (authHeader) internalAuthHeaders['Authorization'] = authHeader;
+    const cookie = request.headers.get('cookie');
+    if (cookie) internalAuthHeaders['Cookie'] = cookie;
 
     const customHeaders = HeaderUtils.extractForwardHeaders(request.headers);
     const config = new Config({
@@ -139,9 +166,19 @@ export async function POST(request: NextRequest) {
     const systemPrompt = buildSystemPrompt(assistantType, finalContext);
 
     // 构建消息数组
+    // 限制历史对话条数和总字符数，避免 LLM token 爆炸
+    const MAX_HISTORY_MESSAGES = 10;
+    const MAX_TOTAL_CHARS = 8000;
+    let limitedMessages = messages.slice(-MAX_HISTORY_MESSAGES);
+    let totalChars = limitedMessages.reduce((sum: number, m: any) => sum + (typeof m.content === 'string' ? m.content.length : 0), 0);
+    while (totalChars > MAX_TOTAL_CHARS && limitedMessages.length > 1) {
+      const removed = limitedMessages.shift();
+      totalChars -= (typeof removed.content === 'string' ? removed.content.length : 0);
+    }
+
     const fullMessages = [
       { role: 'system', content: systemPrompt },
-      ...messages,
+      ...limitedMessages,
     ];
 
     // 根据助手类型设置温度
@@ -161,6 +198,7 @@ export async function POST(request: NextRequest) {
       currentSessionId,
       temperature,
       model,
+      authHeaders: internalAuthHeaders,
     });
 
   } catch (error) {

@@ -20,6 +20,16 @@ export async function POST(request: NextRequest) {
       return ApiErrors.validation('缺少必要参数');
     }
 
+    // 安全修复（P3 输入校验）：限制消息标题/内容长度，避免超长输入
+    const MAX_TITLE_LENGTH = 200;
+    const MAX_CONTENT_LENGTH = 2000;
+    if (typeof title === 'string' && title.length > MAX_TITLE_LENGTH) {
+      return ApiErrors.validation(`消息标题过长，最大支持 ${MAX_TITLE_LENGTH} 字符`);
+    }
+    if (typeof content === 'string' && content.length > MAX_CONTENT_LENGTH) {
+      return ApiErrors.validation(`消息内容过长，最大支持 ${MAX_CONTENT_LENGTH} 字符`);
+    }
+
     // 发送者身份从认证令牌获取，防止客户端伪造 senderId 冒充其他志愿者
     const senderId = auth.payload!.userId;
 

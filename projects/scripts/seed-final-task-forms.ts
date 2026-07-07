@@ -1,3 +1,6 @@
+import dotenv from 'dotenv';
+dotenv.config({ path: '.env.local' });
+
 /**
  * 种子脚本：创建三个角色的最后任务表单（基于学生人工智能素养水平量表_后测）
  * 
@@ -7,7 +10,7 @@
 import { createClient } from '@supabase/supabase-js';
 
 const SUPABASE_URL = 'https://emfluysvhghloklrmcxi.supabase.co';
-const SUPABASE_SERVICE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVtZmx1eXN2aGdobG9rbHJtY3hpIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3OTgwMTYzMywiZXhwIjoyMDk1Mzc3NjMzfQ.qDB8GMxGBMW7XMJfMSjOc-8SBhxUkgH91INa9MQ7gJ0';
+const SUPABASE_SERVICE_KEY = process.env.COZE_SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 

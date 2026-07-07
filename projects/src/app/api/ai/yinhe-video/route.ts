@@ -4,6 +4,7 @@ import { VideoGenerationClient, Config, HeaderUtils, Content } from 'coze-coding
 import { uploadFile, generateSignedUrl } from '@/lib/storage-utils';
 import { ApiErrors } from '@/lib/api-error';
 import { AI_API_KEY, AI_BASE_URL, AI_MODEL_BASE_URL } from '@/lib/ai-config';
+import { checkAiRateLimit } from '@/lib/rate-limit';
 
 /**
  * 银蛇博士视频生成 API
@@ -13,6 +14,14 @@ import { AI_API_KEY, AI_BASE_URL, AI_MODEL_BASE_URL } from '@/lib/ai-config';
 export async function POST(request: NextRequest) {
   const auth = requireAnyAuth(request);
   if (!auth.authenticated) return authError(auth);
+
+  const rateLimit = await checkAiRateLimit(request, auth.payload?.userId, 'ai_video');
+  if (!rateLimit.allowed) {
+    return NextResponse.json(
+      { success: false, error: rateLimit.message },
+      { status: 429 }
+    );
+  }
 
   try {
     const { prompt, duration = 5, resolution = '720p', ratio = '16:9', imageUrl, teamId, taskContext } = await request.json();

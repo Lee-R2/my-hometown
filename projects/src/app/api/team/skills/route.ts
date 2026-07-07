@@ -155,7 +155,8 @@ export async function POST(request: NextRequest) {
       .single();
 
     if (error) {
-      return NextResponse.json({ error: '开始学习失败: ' + error.message }, { status: 400 });
+      // 安全修复：不直接返回 error.message，避免泄露数据库内部信息
+      return supabaseErrorResponse(error, '开始学习失败');
     }
 
     return NextResponse.json({ success: true, learning });

@@ -256,6 +256,9 @@ export async function POST(request: NextRequest) {
  * 查询迁移状态
  */
 export async function GET(request: NextRequest) {
+  const auth = requireAdmin(request);
+  if (!auth.authenticated) return authError(auth);
+
   try {
     const client = getSupabaseClient();
 

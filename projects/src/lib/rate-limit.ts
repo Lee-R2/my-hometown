@@ -26,6 +26,23 @@ export const DEFAULT_RATE_LIMITS: Record<string, RateLimitConfig> = {
   sensitive: { windowMs: 24 * 60 * 60 * 1000, maxRequests: 10, message: '操作过于频繁，请明天再试' },
   // 一般页面：每分钟最多100次
   general: { windowMs: 60 * 1000, maxRequests: 100, message: '访问过于频繁，请稍后再试' },
+  // AI 接口速率限制（按成本分级）
+  // AI 对话：每分钟最多10次（高频，中等成本）
+  ai_chat: { windowMs: 60 * 1000, maxRequests: 10, message: 'AI对话请求过于频繁，请1分钟后再试' },
+  // AI 语音合成：每小时最多20次（中频，高成本）
+  ai_tts: { windowMs: 60 * 60 * 1000, maxRequests: 20, message: '语音合成请求过于频繁，请稍后再试' },
+  // AI 语音识别：每小时最多20次（中频，高成本）
+  ai_asr: { windowMs: 60 * 60 * 1000, maxRequests: 20, message: '语音识别请求过于频繁，请稍后再试' },
+  // AI 图片生成：每天最多10次（低频，极高成本）
+  ai_image: { windowMs: 24 * 60 * 60 * 1000, maxRequests: 10, message: '图片生成次数已达每日上限，请明天再试' },
+  // AI 视频生成：每天最多3次（低频，极高成本）
+  ai_video: { windowMs: 24 * 60 * 60 * 1000, maxRequests: 3, message: '视频生成次数已达每日上限，请明天再试' },
+  // AI 审核提交：每小时最多15次（中频，中等成本）
+  ai_review: { windowMs: 60 * 60 * 1000, maxRequests: 15, message: 'AI审核请求过于频繁，请稍后再试' },
+  // AI 主题创建：每天最多5次（低频，中等成本）
+  ai_create_theme: { windowMs: 24 * 60 * 60 * 1000, maxRequests: 5, message: '主题创建次数已达每日上限，请明天再试' },
+  // AI 墨水井阅读：每小时最多10次（低频，中等成本）
+  ai_inkwell: { windowMs: 60 * 60 * 1000, maxRequests: 10, message: '阅读分析请求过于频繁，请稍后再试' },
 };
 
 // ========== 频率限制结果 ==========
@@ -114,6 +131,24 @@ export async function checkRateLimit(
     // 出错时默认允许，避免影响正常访问
     return { allowed: true, remaining: config.maxRequests, resetTime: now + config.windowMs };
   }
+}
+
+/**
+ * AI 接口速率限制辅助函数
+ * 从请求中提取用户ID（优先）或IP作为标识符，检查频率限制
+ * @param request NextRequest 对象
+ * @param userId 已认证的用户ID（优先使用）
+ * @param type 速率限制类型（如 'ai_chat', 'ai_tts' 等）
+ * @returns 限制结果，allowed 为 false 时应直接返回 429 响应
+ */
+export async function checkAiRateLimit(
+  request: NextRequest,
+  userId: string | undefined,
+  type: string
+): Promise<RateLimitResult> {
+  // 优先使用用户ID，其次使用IP
+  const identifier = userId || getClientIP(request);
+  return checkRateLimit(identifier, type);
 }
 
 /**

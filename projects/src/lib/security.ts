@@ -3,6 +3,7 @@
  * 提供加密、令牌、验证等安全功能
  */
 
+import bcrypt from 'bcryptjs';
 import { createHash, randomBytes, createHmac, timingSafeEqual } from 'crypto';
 
 // ========== 加密工具 ==========
@@ -39,56 +40,90 @@ export function generateSalt(): string {
 
 // ========== 密码哈希 ==========
 
-const PASSWORD_HASH_ALGORITHM = 'sha256';
-const PASSWORD_SALT_LENGTH = 32;
-const PASSWORD_ITERATIONS = 10000;
+// 旧版 SHA-256 参数，仅用于兼容验证历史数据，不再用于生成新哈希
+const LEGACY_PASSWORD_HASH_ALGORITHM = 'sha256';
+const LEGACY_PASSWORD_ITERATIONS = 10000;
+const BCRYPT_COST_FACTOR = 10;
 
 /**
- * 哈希密码
- * @param password 明文密码
- * @returns 哈希后的密码格式: salt:hash
+ * 旧版 SHA-256 密码哈希（仅用于兼容验证历史数据）
+ * 返回格式: salt:hash
  */
-export function hashPassword(password: string): string {
-  const salt = randomBytes(PASSWORD_SALT_LENGTH).toString('hex');
+function legacySha256Hash(password: string, salt: string): string {
   let hash = password;
-
-  // 使用多次迭代增加哈希复杂度
-  for (let i = 0; i < PASSWORD_ITERATIONS; i++) {
-    hash = createHash(PASSWORD_HASH_ALGORITHM).update(hash + salt).digest('hex');
+  for (let i = 0; i < LEGACY_PASSWORD_ITERATIONS; i++) {
+    hash = createHash(LEGACY_PASSWORD_HASH_ALGORITHM).update(hash + salt).digest('hex');
   }
-
-  return `${salt}:${hash}`;
+  return hash;
 }
 
 /**
- * 验证密码
+ * 哈希密码（使用 bcrypt，cost factor 10）
+ * bcrypt 自带盐值且抗 GPU/ASIC 破解，替代旧的 SHA-256 迭代方案
  * @param password 明文密码
- * @param hashedPassword 哈希后的密码（格式: salt:hash）
+ * @returns bcrypt 哈希字符串（以 $2a$ / $2b$ 开头）
+ */
+export function hashPassword(password: string): string {
+  return bcrypt.hashSync(password, BCRYPT_COST_FACTOR);
+}
+
+/**
+ * 验证密码（兼容 bcrypt 与旧 SHA-256 哈希）
+ * - 新哈希（bcrypt，$2a$ / $2b$ / $2y$ 开头）：直接 bcrypt.compare
+ * - 旧哈希（salt:hash 格式）：回退到 SHA-256 验证
+ *
+ * 验证成功后，调用方应通过 needsRehash() 判断是否需要用 bcrypt 重新哈希升级，
+ * 以实现平滑迁移：老用户登录后哈希自动升级。
+ * @param password 明文密码
+ * @param hashedPassword 哈希后的密码（bcrypt 或旧 salt:hash 格式）
  */
 export function verifyPassword(password: string, hashedPassword: string): boolean {
   try {
-    // 必须是哈希格式（包含冒号），拒绝明文密码
-    if (!hashedPassword || !hashedPassword.includes(':')) {
-      return false;
+    if (!hashedPassword) return false;
+
+    // 先尝试 bcrypt（新哈希以 $2a$ / $2b$ / $2y$ 开头）
+    if (
+      hashedPassword.startsWith('$2a$') ||
+      hashedPassword.startsWith('$2b$') ||
+      hashedPassword.startsWith('$2y$')
+    ) {
+      return bcrypt.compareSync(password, hashedPassword);
     }
 
-    const [salt, storedHash] = hashedPassword.split(':');
-    if (!salt || !storedHash) return false;
-
-    let computedHash = password;
-    for (let i = 0; i < PASSWORD_ITERATIONS; i++) {
-      computedHash = createHash(PASSWORD_HASH_ALGORITHM).update(computedHash + salt).digest('hex');
+    // 回退到旧 SHA-256 验证（兼容老数据，格式 salt:hash）
+    if (hashedPassword.includes(':')) {
+      const [salt, storedHash] = hashedPassword.split(':');
+      if (!salt || !storedHash) return false;
+      const computedHash = legacySha256Hash(password, salt);
+      try {
+        const storedBuffer = Buffer.from(storedHash, 'hex');
+        const computedBuffer = Buffer.from(computedHash, 'hex');
+        // 使用 timing-safe equal 防止时序攻击
+        if (storedBuffer.length !== computedBuffer.length) return false;
+        return timingSafeEqual(storedBuffer, computedBuffer);
+      } catch {
+        return false;
+      }
     }
 
-    // 使用 timing-safe equal 防止时序攻击
-    return timingSafeEqual(
-      Buffer.from(storedHash, 'hex'),
-      Buffer.from(computedHash, 'hex')
-    );
+    return false;
   } catch (error) {
     console.error('密码验证错误:', error);
     return false;
   }
+}
+
+/**
+ * 判断密码哈希是否需要升级到 bcrypt
+ * 登录成功后调用：若返回 true，应用 hashPassword 重新哈希并写回数据库
+ */
+export function needsRehash(hashedPassword: string): boolean {
+  if (!hashedPassword) return false;
+  return !(
+    hashedPassword.startsWith('$2a$') ||
+    hashedPassword.startsWith('$2b$') ||
+    hashedPassword.startsWith('$2y$')
+  );
 }
 
 /**
@@ -144,19 +179,17 @@ export function checkPasswordStrength(password: string): {
 
 // ========== 令牌管理 ==========
 
+// 安全修复 VULN-API-019: TOKEN_SECRET 缺失时不允许降级为公开硬编码密钥，
+// 否则攻击者可使用公开密钥伪造任意 JWT 令牌冒充任意用户。
+// 无条件抛错，要求所有环境（含开发）都必须在 .env.local 中配置 TOKEN_SECRET。
 const TOKEN_SECRET = (() => {
   const secret = process.env.TOKEN_SECRET;
-  if (!secret) {
-    if (process.env.NODE_ENV === 'production') {
-      throw new Error(
-        '[SECURITY] TOKEN_SECRET 环境变量未设置！生产环境必须配置 TOKEN_SECRET。'
-      );
-    }
-    console.error(
-      '[SECURITY] TOKEN_SECRET 环境变量未设置！令牌签名将不安全。请在 .env 中设置 TOKEN_SECRET'
+  if (!secret || secret.trim() === '') {
+    throw new Error(
+      '[SECURITY] TOKEN_SECRET 环境变量未配置！请在 .env / .env.local 中设置一个足够随机的 TOKEN_SECRET 后再启动服务。'
     );
   }
-  return secret || 'dev-only-insecure-key-do-not-use-in-production';
+  return secret;
 })();
 const TOKEN_EXPIRY = 7 * 24 * 60 * 60 * 1000; // 7天
 
@@ -314,6 +347,14 @@ export function maskPhoneNumber(phone: string): string {
 }
 
 /**
+ * 脱敏手机号（maskPhoneNumber 的别名，统一对外命名）
+ * 显示为 138****1234 格式
+ */
+export function maskPhone(phone: string): string {
+  return maskPhoneNumber(phone);
+}
+
+/**
  * 脱敏邮箱
  */
 export function maskEmail(email: string): string {
@@ -359,6 +400,41 @@ export function isSafeUrl(url: string): boolean {
 }
 
 /**
+ * 判断 IP 字符串是否为内网/保留地址（IPv4）
+ * 覆盖：10.x、172.16-31.x、192.168.x、127.x、169.254.x、0.x
+ * 安全修复（P3 SSRF）：防止服务端被诱导请求内网资源
+ */
+export function isPrivateIp(ip: string): boolean {
+  // 仅处理 IPv4，IPv6 暂按非内网处理（下方 isInternalHost 兜底）
+  const ipv4Match = ip.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (!ipv4Match) return false;
+  const [a, b] = [parseInt(ipv4Match[1], 10), parseInt(ipv4Match[2], 10)];
+  if (a === 10) return true;                 // 10.0.0.0/8
+  if (a === 172 && b >= 16 && b <= 31) return true; // 172.16.0.0/12
+  if (a === 192 && b === 168) return true;   // 192.168.0.0/16
+  if (a === 127) return true;                // 127.0.0.0/8 回环
+  if (a === 169 && b === 254) return true;   // 169.254.0.0/16 链路本地
+  if (a === 0) return true;                  // 0.0.0.0/8
+  return false;
+}
+
+/**
+ * 判断主机名是否指向内部/本机（用于 SSRF 防御）
+ * 覆盖：localhost、*.local、IP 字面量回环、内网 IP
+ */
+export function isInternalHost(host: string): boolean {
+  const h = host.toLowerCase().trim();
+  if (!h) return true;
+  if (h === 'localhost' || h.endsWith('.localhost')) return true;
+  if (h === 'local' || h.endsWith('.local')) return true;
+  // 方括号包裹的 IPv6 字面量（如 [::1]）
+  if (h.startsWith('[') && h.endsWith(']')) return true;
+  // IPv4 字面量
+  if (isPrivateIp(h)) return true;
+  return false;
+}
+
+/**
  * 验证文件类型
  */
 export function isSafeFileType(filename: string, allowedTypes: string[]): boolean {
@@ -366,6 +442,26 @@ export function isSafeFileType(filename: string, allowedTypes: string[]): boolea
   if (!ext) return false;
 
   return allowedTypes.includes(`.${ext}`);
+}
+
+/**
+ * 危险扩展名黑名单（即使 MIME 类型看起来正常也拒绝）
+ * 安全修复（P3 输入校验）：防止上传可执行脚本/可含 XSS 的文件
+ * - .exe/.bat/.cmd/.sh：可执行脚本
+ * - .php/.js：服务端/客户端脚本
+ * - .html/.svg：可内嵌脚本导致 XSS
+ */
+const DANGEROUS_EXTENSIONS = new Set([
+  'exe', 'bat', 'cmd', 'sh', 'php', 'js', 'html', 'htm', 'svg',
+]);
+
+/**
+ * 判断文件扩展名是否在危险黑名单中
+ */
+export function isDangerousExtension(filename: string): boolean {
+  const ext = filename.split('.').pop()?.toLowerCase();
+  if (!ext) return true; // 无扩展名视为危险
+  return DANGEROUS_EXTENSIONS.has(ext);
 }
 
 /**

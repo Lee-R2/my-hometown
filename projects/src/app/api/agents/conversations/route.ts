@@ -82,6 +82,7 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const agentUsername = searchParams.get('agentUsername');
     const sessionId = searchParams.get('sessionId');
+    const userId = searchParams.get('userId');
     const limit = parseInt(searchParams.get('limit') || '20');
     const offset = parseInt(searchParams.get('offset') || '0');
 
@@ -96,11 +97,25 @@ export async function GET(request: NextRequest) {
     }
 
     const client = getSupabaseClient();
-    const { data, error, count } = await client
+    // VULN-AI-015 修复：附加 user_id 过滤条件，确保只能查到属于该用户的对话历史
+    // 超级管理员(super_admin)可选不传 userId 以支持跨用户管理；其他角色必须传 userId 自我限定
+    const currentRole = auth.payload?.role;
+    const currentUserId = auth.payload?.userId;
+    let query = client
       .from('agent_conversations')
       .select('*', { count: 'exact' })
       .eq('agent_username', agentUsername)
-      .eq('session_id', sessionId)
+      .eq('session_id', sessionId);
+
+    if (currentRole !== 'super_admin') {
+      // 非超管只能查询自己的对话历史（按当前登录身份强制限定，忽略前端传入的 userId）
+      query = query.eq('user_id', currentUserId);
+    } else if (userId) {
+      // 超管可指定查询某个用户的对话历史
+      query = query.eq('user_id', userId);
+    }
+
+    const { data, error, count } = await query
       .order('created_at', { ascending: true })
       .range(offset, offset + limit - 1);
 

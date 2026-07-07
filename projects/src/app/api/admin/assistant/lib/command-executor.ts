@@ -190,9 +190,11 @@ async function executeSendMessage(
   client: any,
   senderId: string,
   senderRole: string,
-  command: { type: string; targetName: string; content: string }
-): Promise<{ success: boolean; message: string; count?: number }> {
+  command: { type: string; targetName: string; content: string },
+  context?: { userRole?: string; schoolId?: string }
+): Promise<{ success: boolean; message: string; count?: number; error?: string }> {
   const { type, targetName, content } = command;
+  const userRole = context?.userRole || senderRole;
 
   try {
     let targetIds: string[] = [];
@@ -209,7 +211,7 @@ async function executeSendMessage(
           .eq('status', 'active')
           .limit(1)
           .single();
-        
+
         if (!team) {
           return { success: false, message: `未找到名为"${targetName}"的小队` };
         }
@@ -227,7 +229,7 @@ async function executeSendMessage(
           .eq('role', 'volunteer')
           .limit(1)
           .single();
-        
+
         if (!volunteer) {
           return { success: false, message: `未找到名为"${targetName}"的志愿者` };
         }
@@ -245,7 +247,7 @@ async function executeSendMessage(
           .eq('role', 'teacher')
           .limit(1)
           .single();
-        
+
         if (!teacher) {
           return { success: false, message: `未找到名为"${targetName}"的助学老师` };
         }
@@ -254,132 +256,134 @@ async function executeSendMessage(
         break;
       }
 
-      case 'all_teams': {
-        // 所有活跃小队
-        const { data: teams } = await client
-          .from('teams')
-          .select('id')
-          .eq('status', 'active');
-        targetIds = (teams || []).map((t: any) => t.id);
-        targetType = 'team';
-        break;
-      }
-
-      case 'all_volunteers': {
-        // 所有志愿者
-        const { data: volunteers } = await client
-          .from('users')
-          .select('id')
-          .eq('role', 'volunteer');
-        targetIds = (volunteers || []).map((v: any) => v.id);
-        targetType = 'volunteer';
-        break;
-      }
-
+      case 'all_teams':
+      case 'all_volunteers':
       case 'all_teachers': {
-        // 所有助学老师
-        const { data: teachers } = await client
-          .from('users')
-          .select('id')
-          .eq('role', 'teacher');
-        targetIds = (teachers || []).map((t: any) => t.id);
-        targetType = 'teacher';
-        break;
-      }
-
-      case 'school_teams': {
-        // 按学校名称查找小队
-        const { data: school } = await client
-          .from('schools')
-          .select('id')
-          .ilike('name', `%${targetName}%`)
-          .limit(1)
-          .single();
-        
-        if (!school) {
-          return { success: false, message: `未找到名为"${targetName}"的学校` };
+        // 角色分层：全体广播仅限管理员，避免低权限角色批量群发
+        if (userRole !== 'super_admin' && userRole !== 'admin') {
+          return { success: false, message: '权限不足，仅管理员可向全体发送消息', error: '权限不足' };
         }
 
-        const { data: teams } = await client
-          .from('teams')
-          .select('id')
-          .eq('school_id', school.id)
-          .eq('status', 'active');
-        targetIds = (teams || []).map((t: any) => t.id);
-        targetType = 'team';
-        break;
-      }
-
-      case 'progress_slow_teams': {
-        // 进度落后的小队（积分较低的前20%）
-        const { data: allTeams } = await client
-          .from('teams')
-          .select('id, points')
-          .eq('status', 'active')
-          .order('points', { ascending: true });
-        
-        if (!allTeams || allTeams.length === 0) {
-          return { success: false, message: '当前没有活跃的小队' };
+        if (type === 'all_teams') {
+          // 所有活跃小队
+          const { data: teams } = await client
+            .from('teams')
+            .select('id')
+            .eq('status', 'active');
+          targetIds = (teams || []).map((t: any) => t.id);
+          targetType = 'team';
+        } else if (type === 'all_volunteers') {
+          // 所有志愿者
+          const { data: volunteers } = await client
+            .from('users')
+            .select('id')
+            .eq('role', 'volunteer');
+          targetIds = (volunteers || []).map((v: any) => v.id);
+          targetType = 'volunteer';
+        } else {
+          // 所有助学老师
+          const { data: teachers } = await client
+            .from('users')
+            .select('id')
+            .eq('role', 'teacher');
+          targetIds = (teachers || []).map((t: any) => t.id);
+          targetType = 'teacher';
         }
-        
-        // 取积分最低的20%（至少1个）
-        const slowCount = Math.max(1, Math.ceil(allTeams.length * 0.2));
-        targetIds = allTeams.slice(0, slowCount).map((t: any) => t.id);
-        targetType = 'team';
         break;
       }
 
-      case 'pending_review_teams': {
-        // 有待审核产出的小队
-        const { data: pendingSubmissions } = await client
-          .from('task_submissions')
-          .select('team_id')
-          .eq('status', 'pending');
-        
-        if (!pendingSubmissions || pendingSubmissions.length === 0) {
-          return { success: false, message: '当前没有待审核的产出' };
-        }
-        
-        // 去重获取小队ID
-        const teamSet = new Set<string>(pendingSubmissions.map((s: any) => s.team_id).filter(Boolean));
-        targetIds = Array.from(teamSet) as string[];
-        targetType = 'team';
-        break;
-      }
-
-      case 'high_achieving_teams': {
-        // 表现优秀的小队（积分较高的前20%）
-        const { data: allTeams } = await client
-          .from('teams')
-          .select('id, points')
-          .eq('status', 'active')
-          .order('points', { ascending: false });
-        
-        if (!allTeams || allTeams.length === 0) {
-          return { success: false, message: '当前没有活跃的小队' };
-        }
-        
-        // 取积分最高的20%（至少1个）
-        const topCount = Math.max(1, Math.ceil(allTeams.length * 0.2));
-        targetIds = allTeams.slice(0, topCount).map((t: any) => t.id);
-        targetType = 'team';
-        break;
-      }
-
+      case 'school_teams':
+      case 'progress_slow_teams':
+      case 'pending_review_teams':
+      case 'high_achieving_teams':
       case 'zero_points_teams': {
-        // 积分为零的小队
-        const { data: zeroTeams } = await client
-          .from('teams')
-          .select('id')
-          .eq('status', 'active')
-          .or('points.is.null,points.eq.0');
-        
-        if (!zeroTeams || zeroTeams.length === 0) {
-          return { success: false, message: '当前没有积分为零的小队' };
+        // 角色分层：分组群发仅限管理员/志愿者/助学老师，禁止 team/parent 越权
+        if (!['super_admin', 'admin', 'volunteer', 'teacher'].includes(userRole || '')) {
+          return { success: false, message: '权限不足', error: '权限不足' };
         }
-        
-        targetIds = zeroTeams.map((t: any) => t.id);
-        targetType = 'team';
+
+        if (type === 'school_teams') {
+          // 按学校名称查找小队
+          const { data: school } = await client
+            .from('schools')
+            .select('id')
+            .ilike('name', `%${targetName}%`)
+            .limit(1)
+            .single();
+
+          if (!school) {
+            return { success: false, message: `未找到名为"${targetName}"的学校` };
+          }
+
+          const { data: teams } = await client
+            .from('teams')
+            .select('id')
+            .eq('school_id', school.id)
+            .eq('status', 'active');
+          targetIds = (teams || []).map((t: any) => t.id);
+          targetType = 'team';
+        } else if (type === 'progress_slow_teams') {
+          // 进度落后的小队（积分较低的前20%）
+          const { data: allTeams } = await client
+            .from('teams')
+            .select('id, points')
+            .eq('status', 'active')
+            .order('points', { ascending: true });
+
+          if (!allTeams || allTeams.length === 0) {
+            return { success: false, message: '当前没有活跃的小队' };
+          }
+
+          // 取积分最低的20%（至少1个）
+          const slowCount = Math.max(1, Math.ceil(allTeams.length * 0.2));
+          targetIds = allTeams.slice(0, slowCount).map((t: any) => t.id);
+          targetType = 'team';
+        } else if (type === 'pending_review_teams') {
+          // 有待审核产出的小队
+          const { data: pendingSubmissions } = await client
+            .from('task_submissions')
+            .select('team_id')
+            .eq('status', 'pending');
+
+          if (!pendingSubmissions || pendingSubmissions.length === 0) {
+            return { success: false, message: '当前没有待审核的产出' };
+          }
+
+          // 去重获取小队ID
+          const teamSet = new Set<string>(pendingSubmissions.map((s: any) => s.team_id).filter(Boolean));
+          targetIds = Array.from(teamSet) as string[];
+          targetType = 'team';
+        } else if (type === 'high_achieving_teams') {
+          // 表现优秀的小队（积分较高的前20%）
+          const { data: allTeams } = await client
+            .from('teams')
+            .select('id, points')
+            .eq('status', 'active')
+            .order('points', { ascending: false });
+
+          if (!allTeams || allTeams.length === 0) {
+            return { success: false, message: '当前没有活跃的小队' };
+          }
+
+          // 取积分最高的20%（至少1个）
+          const topCount = Math.max(1, Math.ceil(allTeams.length * 0.2));
+          targetIds = allTeams.slice(0, topCount).map((t: any) => t.id);
+          targetType = 'team';
+        } else {
+          // zero_points_teams：积分为零的小队
+          const { data: zeroTeams } = await client
+            .from('teams')
+            .select('id')
+            .eq('status', 'active')
+            .or('points.is.null,points.eq.0');
+
+          if (!zeroTeams || zeroTeams.length === 0) {
+            return { success: false, message: '当前没有积分为零的小队' };
+          }
+
+          targetIds = zeroTeams.map((t: any) => t.id);
+          targetType = 'team';
+        }
         break;
       }
 
@@ -628,16 +632,21 @@ async function executeEvaluateSubmission(
  * 如果传入的是UUID格式，直接返回
  * 如果传入的是主题名称，查询数据库获取对应UUID
  */
-async function resolveThemeId(themeIdOrName: string): Promise<{ id: string; name: string } | null> {
+async function resolveThemeId(
+  themeIdOrName: string,
+  authHeaders?: Record<string, string>
+): Promise<{ id: string; name: string } | null> {
   // UUID 格式检测
   const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   if (uuidPattern.test(themeIdOrName)) {
     return { id: themeIdOrName, name: '' };
   }
-  
+
   // 按主题名称查询
   try {
-    const res = await fetch(`http://localhost:${process.env.DEPLOY_RUN_PORT || 5000}/api/ai/create-theme`);
+    const res = await fetch(`http://localhost:${process.env.DEPLOY_RUN_PORT || 5000}/api/ai/create-theme`, {
+      headers: authHeaders || {},
+    });
     if (res.ok) {
       const data = await res.json();
       if (data.success && Array.isArray(data.themes)) {
@@ -673,9 +682,17 @@ export async function executeCreateTheme(
     icon?: string;
     isExclusive?: boolean;
     schoolId?: string;
-  } = {}
-): Promise<{ success: boolean; themeId?: string; message: string }> {
+  } = {},
+  context?: { userRole?: string; schoolId?: string }
+): Promise<{ success: boolean; themeId?: string; message: string; error?: string }> {
   try {
+    // 角色分层：志愿者/助学老师只能为本校创建主题，不能跨校
+    if (context?.userRole === 'volunteer' || context?.userRole === 'teacher') {
+      if (context.schoolId && options.schoolId && options.schoolId !== context.schoolId) {
+        return { success: false, message: '无权为其他学校创建主题', error: '无权为其他学校创建主题' };
+      }
+    }
+
     const { data: theme, error } = await client
       .from('task_themes')
       .insert({
@@ -838,7 +855,7 @@ export async function executeGenerateReport(
 export async function executeCommandChain(
   client: any,
   commands: Array<{ type: string; params: Record<string, any> }>,
-  context: { userId: string; userRole: string }
+  context: { userId: string; userRole: string; schoolId?: string }
 ): Promise<Array<{ type: string; success: boolean; result: any; message: string }>> {
   const results: Array<{ type: string; success: boolean; result: any; message: string }> = [];
 
@@ -847,7 +864,7 @@ export async function executeCommandChain(
 
     switch (cmd.type) {
       case 'send_message':
-        result = await executeSendMessage(client, context.userId, context.userRole, cmd.params as any);
+        result = await executeSendMessage(client, context.userId, context.userRole, cmd.params as any, { userRole: context.userRole, schoolId: context.schoolId });
         break;
       case 'view_submission':
         result = await executeViewSubmission(client, cmd.params as any);
@@ -856,7 +873,7 @@ export async function executeCommandChain(
         result = await executeEvaluateSubmission(client, cmd.params as any);
         break;
       case 'create_theme':
-        result = await executeCreateTheme(client, cmd.params.name, cmd.params.description, cmd.params.options);
+        result = await executeCreateTheme(client, cmd.params.name, cmd.params.description, cmd.params.options, { userRole: context.userRole, schoolId: context.schoolId });
         break;
       case 'send_notification':
         result = await executeSendNotification(client, cmd.params.teamIds, cmd.params.title, cmd.params.content, context.userId);

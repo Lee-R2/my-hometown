@@ -10,15 +10,36 @@ export async function PUT(
   const auth = requireAnyAuth(request);
   if (!auth.authenticated) return authError(auth);
 
-  // team 角色只能修改自己小队的成员
-  if (auth.payload?.role === 'team' && auth.payload?.userId !== (await params).id) {
-    return ApiErrors.forbidden('只能修改自己小队的成员');
+  // parent 角色无权修改成员
+  if (auth.payload!.role === 'parent') {
+    return ApiErrors.forbidden('家长无权修改小队成员');
   }
 
   try {
     const { id, memberId } = await params;
-    const body = await request.json();
     const client = getSupabaseClient();
+
+    // team 角色只能修改自己小队的成员
+    if (auth.payload!.role === 'team' && auth.payload!.userId !== id) {
+      return ApiErrors.forbidden('只能修改自己小队的成员');
+    }
+
+    // volunteer/teacher 角色按学校范围校验
+    if (auth.payload!.role === 'volunteer' || auth.payload!.role === 'teacher') {
+      const { data: targetTeam } = await client
+        .from('teams')
+        .select('school_id')
+        .eq('id', id)
+        .maybeSingle();
+      if (!targetTeam) {
+        return ApiErrors.notFound('小队不存在');
+      }
+      if (targetTeam.school_id !== auth.payload!.schoolId) {
+        return ApiErrors.forbidden('无权操作其他学校的小队');
+      }
+    }
+
+    const body = await request.json();
 
     const { data: member, error } = await client
       .from('team_members')
@@ -51,14 +72,34 @@ export async function DELETE(
   const auth = requireAnyAuth(request);
   if (!auth.authenticated) return authError(auth);
 
-  // team 角色只能删除自己小队的成员
-  if (auth.payload?.role === 'team' && auth.payload?.userId !== (await params).id) {
-    return ApiErrors.forbidden('只能删除自己小队的成员');
+  // parent 角色无权删除成员
+  if (auth.payload!.role === 'parent') {
+    return ApiErrors.forbidden('家长无权删除小队成员');
   }
 
   try {
     const { id, memberId } = await params;
     const client = getSupabaseClient();
+
+    // team 角色只能删除自己小队的成员
+    if (auth.payload!.role === 'team' && auth.payload!.userId !== id) {
+      return ApiErrors.forbidden('只能删除自己小队的成员');
+    }
+
+    // volunteer/teacher 角色按学校范围校验
+    if (auth.payload!.role === 'volunteer' || auth.payload!.role === 'teacher') {
+      const { data: targetTeam } = await client
+        .from('teams')
+        .select('school_id')
+        .eq('id', id)
+        .maybeSingle();
+      if (!targetTeam) {
+        return ApiErrors.notFound('小队不存在');
+      }
+      if (targetTeam.school_id !== auth.payload!.schoolId) {
+        return ApiErrors.forbidden('无权操作其他学校的小队');
+      }
+    }
 
     const { error } = await client
       .from('team_members')

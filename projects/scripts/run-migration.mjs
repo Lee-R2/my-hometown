@@ -1,3 +1,6 @@
+import dotenv from 'dotenv';
+dotenv.config({ path: '.env.local' });
+
 /**
  * 通过 Supabase Management API 执行迁移 SQL
  * 使用 Supabase Access Token (从浏览器获取)
@@ -8,7 +11,7 @@ import { join } from 'path';
 const PROJECT_REF = 'emfluysvhghloklrmcxi';
 
 // Supabase Service Key 可以用来调用 Management API
-const SUPABASE_SERVICE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVtZmx1eXN2aGdobG9rbHJtY3hpIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3OTgwMTYzMywiZXhwIjoyMDk1Mzc3NjMzfQ.qDB8GMxGBMW7XMJfMSjOc-8SBhxUkgH91INa9MQ7gJ0';
+const SUPABASE_SERVICE_KEY = process.env.COZE_SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 async function main() {
   // 读取迁移 SQL

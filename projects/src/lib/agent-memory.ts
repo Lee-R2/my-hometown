@@ -143,11 +143,14 @@ export async function getMemories(
 
   try {
     const client = getSupabaseClient();
+    // 过滤已过期的 L1 短期记忆（expires_at 为 null 表示永不过期，gt now 表示未过期）
+    const nowIso = new Date().toISOString();
     let query = client
       .from('agent_memories')
       .select('*')
       .eq('agent_username', agentUsername)
       .eq('is_active', true)
+      .or(`expires_at.is.null,expires_at.gt.${nowIso}`)
       .order('importance', { ascending: false })
       .order('updated_at', { ascending: false });
 
@@ -212,11 +215,14 @@ export async function searchMemories(
   try {
     const client = getSupabaseClient();
 
+    // 过滤已过期的 L1 短期记忆
+    const nowIso = new Date().toISOString();
     let query = client
       .from('agent_memories')
       .select('*')
       .eq('agent_username', agentUsername)
       .eq('is_active', true)
+      .or(`expires_at.is.null,expires_at.gt.${nowIso}`)
       .ilike('content', `%${keyword}%`)
       .order('importance', { ascending: false })
       .order('updated_at', { ascending: false });
@@ -298,11 +304,17 @@ export async function saveConversation(
 
 /**
  * 获取对话历史
+ * @param agentUsername 智能体用户名
+ * @param sessionId 会话ID
+ * @param limit 数量上限
+ * @param userId 当前用户ID（VULN-AI-015 修复：传入后会附加 user_id 过滤，
+ *               确保只能查到属于该用户的对话历史；不传则按原逻辑只按 sessionId 过滤）
  */
 export async function getConversations(
   agentUsername: string,
   sessionId: string,
-  limit: number = 20
+  limit: number = 20,
+  userId?: string
 ): Promise<Conversation[]> {
   if (!ALLOWED_AGENTS.includes(agentUsername)) {
     console.error('无效的智能体:', agentUsername);
@@ -312,11 +324,18 @@ export async function getConversations(
   try {
     const client = getSupabaseClient();
 
-    const { data, error } = await client
+    let query = client
       .from('agent_conversations')
       .select('*')
       .eq('agent_username', agentUsername)
-      .eq('session_id', sessionId)
+      .eq('session_id', sessionId);
+
+    // VULN-AI-015: 校验 sessionId 归属当前用户，防止通过伪造 sessionId 越权读取他人对话
+    if (userId) {
+      query = query.eq('user_id', userId);
+    }
+
+    const { data, error } = await query
       .order('created_at', { ascending: true })
       .limit(limit);
 
@@ -330,11 +349,12 @@ export async function getConversations(
 
 /**
  * 获取用户的所有对话历史（跨会话）- 用于长期记忆
+ * 限制为最近 7 天，最多 10 条，避免旧对话污染当前上下文
  */
 export async function getUserConversations(
   agentUsername: string,
   userId: string,
-  limit: number = 50
+  limit: number = 10
 ): Promise<Conversation[]> {
   if (!ALLOWED_AGENTS.includes(agentUsername)) {
     console.error('无效的智能体:', agentUsername);
@@ -344,17 +364,20 @@ export async function getUserConversations(
   try {
     const client = getSupabaseClient();
 
-    // 获取该用户的所有对话记录，按时间排序
+    // 只获取最近 7 天的对话记录，按时间倒序取最新 limit 条，再正序返回
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
     const { data, error } = await client
       .from('agent_conversations')
       .select('*')
       .eq('agent_username', agentUsername)
       .eq('user_id', userId)
-      .order('created_at', { ascending: true })
+      .gte('created_at', sevenDaysAgo)
+      .order('created_at', { ascending: false })
       .limit(limit);
 
     if (error) throw error;
-    return data || [];
+    // 反转为正序，方便注入 LLM 时按时间顺序展示
+    return (data || []).reverse();
   } catch (error) {
     console.error('获取用户对话历史失败:', error);
     return [];
@@ -569,8 +592,10 @@ export async function getCrossAgentMemories(
 
   try {
     const client = getSupabaseClient();
-    
+
     // 查询来源智能体中，context_key='team_id' 且 context_value 在 teamIds 中的记忆
+    // 过滤已过期的 L1 短期记忆
+    const nowIso = new Date().toISOString();
     let query = client
       .from('agent_memories')
       .select('*')
@@ -578,6 +603,7 @@ export async function getCrossAgentMemories(
       .eq('is_active', true)
       .eq('context_key', 'team_id')
       .in('context_value', teamIds)
+      .or(`expires_at.is.null,expires_at.gt.${nowIso}`)
       .order('importance', { ascending: false })
       .order('updated_at', { ascending: false });
 

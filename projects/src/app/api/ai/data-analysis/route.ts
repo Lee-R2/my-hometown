@@ -64,13 +64,24 @@ export async function POST(request: NextRequest) {
 
   try {
     const body: AnalysisRequest = await request.json();
-    const { question, role, context, dataScope } = body;
+    const { question, role, context } = body;
 
     if (!question || !role) {
       return ApiErrors.validation('缺少必要参数：question role');
     }
 
-    if (!dataScope || !dataScope.userRole) {
+    // 安全：忽略客户端传入的 dataScope，服务端用 auth.payload 重算，
+    // 避免客户端伪造 userRole 越权读取其他角色/学校/小队的数据。
+    const payload = auth.payload as any;
+    const serverDataScope: DataScope = {
+      userRole: payload?.role,
+      userId: payload?.userId,
+      schoolId: payload?.schoolId || null,
+      teamId: payload?.role === 'team' ? payload?.userId : null,
+      volunteerTeamIds: payload?.volunteerTeamIds || [],
+    };
+
+    if (!serverDataScope.userRole) {
       return ApiErrors.validation('缺少必要参数：dataScope（用户数据范围）');
     }
 
@@ -81,14 +92,14 @@ export async function POST(request: NextRequest) {
     const keywords = extractQueryKeywords(cleanedQuestion);
 
     // Step 3: 生成 SQL（调用LLM，传dataScope Prompt 自带范围约束）
-    const sqlResult = await generateSQL(cleanedQuestion, role, dataScope, context, keywords);
+    const sqlResult = await generateSQL(cleanedQuestion, role, serverDataScope, context, keywords);
     if (!sqlResult.success || !sqlResult.sql) {
       return NextResponse.json({
         success: false,
         question: cleanedQuestion,
         error: sqlResult.error || 'SQL 生成失败',
         keywords,
-        scopeLabel: buildScopeLabel(dataScope),
+        scopeLabel: buildScopeLabel(serverDataScope),
       } as AnalysisResult);
     }
 
@@ -103,12 +114,12 @@ export async function POST(request: NextRequest) {
         sql,
         error: `SQL 安全检查未通过：${safetyCheck.blocked.join('; ')}`,
         keywords,
-        scopeLabel: buildScopeLabel(dataScope),
+        scopeLabel: buildScopeLabel(serverDataScope),
       } as AnalysisResult);
     }
 
     // Step 5: 强制注入行级权限（双重保险：即使LLM没有加WHERE，这里也会强制注入）
-    const scopedResult = enforceDataScope(sql, dataScope);
+    const scopedResult = enforceDataScope(sql, serverDataScope);
     if (!scopedResult.safe) {
       return NextResponse.json({
         success: false,
@@ -116,7 +127,7 @@ export async function POST(request: NextRequest) {
         sql,
         error: `数据范围校验未通过：${scopedResult.blocked.join('; ')}`,
         keywords,
-        scopeLabel: buildScopeLabel(dataScope),
+        scopeLabel: buildScopeLabel(serverDataScope),
       } as AnalysisResult);
     }
     sql = scopedResult.sql;
@@ -126,10 +137,10 @@ export async function POST(request: NextRequest) {
 
     // 如果查询出错，尝试修复一次
     if (!queryResult.success && queryResult.error) {
-      const fixedSql = await fixSQLError(sql, queryResult.error, cleanedQuestion, dataScope);
+      const fixedSql = await fixSQLError(sql, queryResult.error, cleanedQuestion, serverDataScope);
       if (fixedSql) {
         const fixSafetyCheck = validateSqlSafety(fixedSql);
-        const fixScopedResult = enforceDataScope(fixedSql, dataScope);
+        const fixScopedResult = enforceDataScope(fixedSql, serverDataScope);
         if (fixSafetyCheck.safe && fixScopedResult.safe) {
           sql = fixScopedResult.sql;
           const retryResult = await executeSQL(sql);
@@ -149,7 +160,7 @@ export async function POST(request: NextRequest) {
         sql,
         error: queryResult.error || '查询执行失败',
         keywords,
-        scopeLabel: buildScopeLabel(dataScope),
+        scopeLabel: buildScopeLabel(serverDataScope),
       } as AnalysisResult);
     }
 
@@ -176,7 +187,7 @@ export async function POST(request: NextRequest) {
       summary,
       warnings: warnings.length > 0 ? warnings : undefined,
       keywords,
-      scopeLabel: buildScopeLabel(dataScope),
+      scopeLabel: buildScopeLabel(serverDataScope),
     } as AnalysisResult);
 
   } catch (error) {

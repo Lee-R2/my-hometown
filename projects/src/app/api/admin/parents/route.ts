@@ -41,9 +41,15 @@ export async function GET(request: NextRequest) {
       return ApiErrors.validation('获取列表失败');
     }
 
+    // 对手机号脱敏后再返回，避免明文泄露
+    const maskedParents = (parents || []).map((p: any) => ({
+      ...p,
+      phone: maskPhone(p.phone),
+    }));
+
     return NextResponse.json({
       success: true,
-      parents: parents || []
+      parents: maskedParents
     });
 
   } catch (error: any) {
@@ -72,7 +78,7 @@ export async function POST(request: NextRequest) {
       .from('parents')
       .update({
         status: action === 'approve' ? 'approved' : 'rejected',
-        reviewed_by: reviewerId || null,
+        reviewed_by: auth.payload!.userId,
         reviewed_at: new Date().toISOString(),
         review_remark: remark || null
       })

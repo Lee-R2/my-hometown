@@ -13,7 +13,7 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const { action = 'check' } = body;
 
-    // 获取所有已批准/逾期的借贷记录
+    // 获取所有已批准/逾期/部分归还的借贷记录（partial_repaid 仍需继续追讨剩余债务）
     const { data: borrowRecords, error: fetchError } = await supabase
       .from('point_borrows')
       .select(`
@@ -21,7 +21,7 @@ export async function POST(request: NextRequest) {
         borrower:borrower_id(id, name, points),
         lender:lender_id(id, name, points)
       `)
-      .in('status', ['approved', 'overdue']);
+      .in('status', ['approved', 'overdue', 'partial_repaid']);
 
     if (fetchError) {
       return ApiErrors.validation('获取借贷记录失败');
@@ -88,12 +88,30 @@ export async function POST(request: NextRequest) {
             const actualRepay = Math.min(borrowerTeam.points, totalRepay);
             const isPartialRepay = borrowerTeam.points < totalRepay;
 
+            // 重新查询借入方当前积分，避免使用初始查询的快照值（循环中可能已被其他请求修改）
+            const { data: freshBorrower } = await supabase
+              .from('teams')
+              .select('id, points')
+              .eq('id', borrowerTeam.id)
+              .single();
+            const borrowerCurrentPoints = freshBorrower?.points || 0;
+
+            // 重新计算基于最新积分的实际还款额
+            const freshActualRepay = Math.min(borrowerCurrentPoints, totalRepay);
+            const freshIsPartial = borrowerCurrentPoints < totalRepay;
+
+            if (freshActualRepay <= 0) {
+              // 最新积分为零，跳过自动还款（下方零积分分支处理）
+              results.processed++;
+              continue;
+            }
+
             // 自动还款逻辑（乐观锁，防止并发双花）
-            // 1. 扣除借入小队积分
-            const borrowerCurrentPoints = borrowerTeam.points || 0;
+            // 1. 扣除借入小队积分（按实际扣除额计算，而非直接设为0，避免超额扣减）
+            const newBorrowerPoints = Math.round((borrowerCurrentPoints - freshActualRepay) * 10) / 10;
             const { data: deductedBorrower } = await supabase
               .from('teams')
-              .update({ points: 0 })
+              .update({ points: newBorrowerPoints })
               .eq('id', borrowerTeam.id)
               .eq('points', borrowerCurrentPoints)
               .select('id');
@@ -105,65 +123,94 @@ export async function POST(request: NextRequest) {
 
             // 2. 增加借出小队积分（乐观锁 + 回滚）
             const lenderCurrentPoints = lenderTeam?.points || 0;
+            const newLenderPoints = Math.round((lenderCurrentPoints + freshActualRepay) * 10) / 10;
             const { data: creditedLender } = await supabase
               .from('teams')
-              .update({ points: lenderCurrentPoints + actualRepay })
+              .update({ points: newLenderPoints })
               .eq('id', lenderTeam?.id)
               .eq('points', lenderCurrentPoints)
               .select('id');
 
             if (!creditedLender || creditedLender.length === 0) {
-              // 借出方加积分失败，回滚借入方扣减
-              await supabase
+              // 借出方加积分失败，回滚借入方扣减（带乐观锁）
+              const rollbackResult = await supabase
                 .from('teams')
                 .update({ points: borrowerCurrentPoints })
-                .eq('id', borrowerTeam.id);
+                .eq('id', borrowerTeam.id)
+                .eq('points', newBorrowerPoints)
+                .select('id');
+              if (!rollbackResult.data || rollbackResult.data.length === 0) {
+                console.error('[overdue] 回滚借入方积分失败，可能产生积分差异', {
+                  borrowerId: borrowerTeam.id,
+                  expectedPoints: borrowerCurrentPoints,
+                  deductedPoints: newBorrowerPoints
+                });
+              }
               continue;
             }
 
-            // 3. 更新借用记录状态
-            await supabase
+            // 3. 更新借用记录状态（部分归还标记为 partial_repaid，全部还清才标记为 repaid）
+            const newStatus = freshIsPartial ? 'partial_repaid' : 'repaid';
+            const unpaidPoints = freshIsPartial ? Math.round((totalRepay - freshActualRepay) * 10) / 10 : 0;
+            const { data: statusUpdate } = await supabase
               .from('point_borrows')
               .update({
-                status: 'repaid',
-                repaid_at: new Date().toISOString(),
-                actual_points: actualRepay,
-                auto_repaid: isPartialRepay,
-                unpaid_points: isPartialRepay ? Math.round((totalRepay - actualRepay) * 10) / 10 : 0
+                status: newStatus,
+                repaid_at: freshIsPartial ? null : new Date().toISOString(),
+                actual_points: freshActualRepay,
+                auto_repaid: true,
+                unpaid_points: unpaidPoints
               })
-              .eq('id', record.id);
+              .eq('id', record.id)
+              .in('status', ['approved', 'overdue', 'partial_repaid'])
+              .select('id');
+
+            if (!statusUpdate || statusUpdate.length === 0) {
+              // 状态已被并发处理，回滚积分转移
+              await supabase
+                .from('teams')
+                .update({ points: borrowerCurrentPoints })
+                .eq('id', borrowerTeam.id)
+                .eq('points', newBorrowerPoints);
+              await supabase
+                .from('teams')
+                .update({ points: lenderCurrentPoints })
+                .eq('id', lenderTeam?.id)
+                .eq('points', newLenderPoints);
+              continue;
+            }
 
             // 4. 记录积分变动
             await supabase.from('point_transactions').insert({
               team_id: borrowerTeam.id,
-              points: -actualRepay,
+              points: -freshActualRepay,
               change_type: 'auto_repay',
               related_id: record.id,
-              description: `系统自动还款 ${actualRepay} 积分${isPartialRepay ? `（积分不足，实际偿还 ${actualRepay}/${totalRepay}）` : ''}`
+              description: `系统自动还款 ${freshActualRepay} 积分${freshIsPartial ? `（积分不足，实际偿还 ${freshActualRepay}/${totalRepay}）` : ''}`
             });
 
             await supabase.from('point_transactions').insert({
               team_id: lenderTeam?.id,
-              points: actualRepay,
+              points: freshActualRepay,
               change_type: 'receive_auto_repay',
               related_id: record.id,
-              description: `系统自动收回 ${actualRepay} 积分${isPartialRepay ? `（部分收回 ${actualRepay}/${totalRepay}）` : ''}`
+              description: `系统自动收回 ${freshActualRepay} 积分${freshIsPartial ? `（部分收回 ${freshActualRepay}/${totalRepay}）` : ''}`
             });
 
             // 5. 发送通知给借入方
             await supabase.from('team_notifications').insert({
               team_id: borrowerTeam.id,
               type: 'borrow_auto_repaid',
-              title: isPartialRepay ? '积分已用尽自动还款' : '逾期自动还款',
-              content: isPartialRepay
-                ? `由于你小队积分不足（${borrowerTeam.points}积分），系统已将全部积分 ${actualRepay} 用于还款。\n原应还${totalRepay} 积分，尚有${Math.round((totalRepay - actualRepay) * 10) / 10} 积分未还清。`
-                : `你已逾期 ${Math.ceil((today.getTime() - repayDate.getTime()) / (1000 * 60 * 60 * 24))} 天，系统自动还款 ${actualRepay} 积分${overdueInterest > 0 ? `（含逾期利息 ${overdueInterest}）` : ''}`,
+              title: freshIsPartial ? '积分已用尽自动还款' : '逾期自动还款',
+              content: freshIsPartial
+                ? `由于你小队积分不足（${borrowerCurrentPoints}积分），系统已将全部积分 ${freshActualRepay} 用于还款。\n原应还${totalRepay} 积分，尚有${unpaidPoints} 积分未还清。`
+                : `你已逾期 ${Math.ceil((today.getTime() - repayDate.getTime()) / (1000 * 60 * 60 * 24))} 天，系统自动还款 ${freshActualRepay} 积分${overdueInterest > 0 ? `（含逾期利息 ${overdueInterest}）` : ''}`,
               is_read: false,
-              extra_data: { 
-                borrowId: record.id, 
-                repaidPoints: actualRepay, 
+              extra_data: {
+                borrowId: record.id,
+                repaidPoints: freshActualRepay,
                 originalTotal: totalRepay,
-                isPartialRepay,
+                isPartialRepay: freshIsPartial,
                 lenderName: lenderTeam?.name
               }
             });
@@ -172,33 +219,33 @@ export async function POST(request: NextRequest) {
             await supabase.from('team_notifications').insert({
               team_id: lenderTeam?.id,
               type: 'borrow_auto_received',
-              title: isPartialRepay ? '收到部分自动还款' : '收到自动还款',
-              content: isPartialRepay
-                ? `「${borrowerTeam.name}」的小队积分已用尽，系统自动收回 ${actualRepay} 积分（部分收回 ${actualRepay}/${totalRepay}）。`
-                : `「${borrowerTeam.name}」已逾期 ${Math.ceil((today.getTime() - repayDate.getTime()) / (1000 * 60 * 60 * 24))} 天，系统自动收回 ${actualRepay} 积分${overdueInterest > 0 ? `（含逾期利息 ${overdueInterest}）` : ''}`,
+              title: freshIsPartial ? '收到部分自动还款' : '收到自动还款',
+              content: freshIsPartial
+                ? `「${borrowerTeam.name}」的小队积分已用尽，系统自动收回 ${freshActualRepay} 积分（部分收回 ${freshActualRepay}/${totalRepay}）。`
+                : `「${borrowerTeam.name}」已逾期 ${Math.ceil((today.getTime() - repayDate.getTime()) / (1000 * 60 * 60 * 24))} 天，系统自动收回 ${freshActualRepay} 积分${overdueInterest > 0 ? `（含逾期利息 ${overdueInterest}）` : ''}`,
               is_read: false,
-              extra_data: { 
-                borrowId: record.id, 
-                repaidPoints: actualRepay, 
+              extra_data: {
+                borrowId: record.id,
+                repaidPoints: freshActualRepay,
                 originalTotal: totalRepay,
-                isPartialRepay,
+                isPartialRepay: freshIsPartial,
                 borrowerName: borrowerTeam?.name
               }
             });
 
             results.autoRepaid++;
           } else if (borrowerTeam && borrowerTeam.points === 0) {
-            // 积分为零，同样自动还款（虽然金额为零）
+            // 积分为零，无法自动还款，保持债务状态（标记为 partial_repaid 并记录未还金额，而非豁免债务）
             await supabase
               .from('point_borrows')
               .update({
-                status: 'repaid',
-                repaid_at: new Date().toISOString(),
-                actual_points: 0,
+                status: 'partial_repaid',
                 auto_repaid: true,
+                actual_points: 0,
                 unpaid_points: totalRepay
               })
-              .eq('id', record.id);
+              .eq('id', record.id)
+              .in('status', ['approved', 'overdue', 'partial_repaid']);
           }
 
           results.processed++;
@@ -273,7 +320,7 @@ export async function GET(request: NextRequest) {
         borrower:borrower_id(id, name, points),
         lender:lender_id(id, name, points)
       `)
-      .in('status', ['approved', 'overdue']);
+      .in('status', ['approved', 'overdue', 'partial_repaid']);
 
     if (error) {
       return ApiErrors.validation('获取借贷记录失败');

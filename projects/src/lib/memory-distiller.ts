@@ -110,10 +110,12 @@ export async function distillAgentMemories(
       const typeMemories = memories.filter(m => m.memory_type === memoryType);
       if (typeMemories.length === 0) continue;
 
-      // 2a. 清理过期记忆
+      // 2a. 清理过期记忆（基于最后访问时间，而非创建时间）
       const expiredMemories = typeMemories.filter(m => {
-        const created = new Date(m.created_at);
-        const ageInDays = (Date.now() - created.getTime()) / (1000 * 60 * 60 * 24);
+        // 优先用 last_accessed_at，没有则回退到 created_at
+        const refDate = m.last_accessed_at || m.created_at;
+        const ref = new Date(refDate);
+        const ageInDays = (Date.now() - ref.getTime()) / (1000 * 60 * 60 * 24);
         return ageInDays > config.maxAge;
       });
 

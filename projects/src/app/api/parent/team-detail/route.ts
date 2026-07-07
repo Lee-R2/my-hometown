@@ -19,6 +19,19 @@ export async function GET(request: NextRequest) {
       return ApiErrors.validation('缺少小队ID');
     }
 
+    // IDOR 防护：验证家长是否关注了该小队
+    // 注意：parent_team_relations 表无 is_active/status 字段，只能校验存在关注关系
+    const { data: follow, error: followError } = await supabase.from('parent_team_relations')
+      .select('id')
+      .eq('parent_id', auth.payload.userId)
+      .eq('team_id', teamId)
+      .maybeSingle();
+    if (followError) {
+      console.error('[家长查看小队详情] 关注关系校验查询失败:', followError);
+      return ApiErrors.forbidden('关注关系校验失败');
+    }
+    if (!follow) return ApiErrors.forbidden('未关注该小队');
+
     // 获取小队基本信息
     const { data: team, error: teamError } = await supabase
       .from('teams')

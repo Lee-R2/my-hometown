@@ -1,7 +1,8 @@
 import { requireAnyAuth, authError, safeError } from '@/lib/api-auth';
 import { ApiErrors } from '@/lib/api-error';
-import { NextRequest } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { checkAiRateLimit } from '@/lib/rate-limit';
 
 import { getTeamData, getSiblingTeamsProgress } from './lib/team-data';
 import { buildDataContext } from './lib/data-context';
@@ -33,6 +34,14 @@ import { SYSTEM_PROMPT } from './lib/system-prompt';
 export async function POST(request: NextRequest) {
   const auth = requireAnyAuth(request);
   if (!auth.authenticated) return authError(auth);
+
+  const rateLimit = await checkAiRateLimit(request, auth.payload?.userId, 'ai_chat');
+  if (!rateLimit.allowed) {
+    return NextResponse.json(
+      { success: false, error: rateLimit.message },
+      { status: 429 }
+    );
+  }
 
   try {
     const body = await request.json();
@@ -112,7 +121,15 @@ export async function POST(request: NextRequest) {
 
     // ===== 对话限制统计 =====
     const agentUsername = 'yinshe_boshi';
-    const sessionId = clientSessionId || `yinhe_team_${teamId}_${Date.now()}`;
+    // VULN-AI-015 修复：校验 clientSessionId 必须归属当前 teamId，防止通过伪造 sessionId 越权读取他人对话
+    let sessionId = `yinhe_team_${teamId}_${Date.now()}`;
+    if (clientSessionId) {
+      if (clientSessionId.includes(teamId)) {
+        sessionId = clientSessionId;
+      } else {
+        console.warn('[银蛇博士API] 拒绝使用与 teamId 不匹配的 clientSessionId，回退到默认会话ID');
+      }
+    }
     const stats = await getConversationStats(agentUsername, sessionId);
 
     // ===== 记忆系统集成 =====

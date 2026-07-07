@@ -59,6 +59,22 @@ export async function executeTrade(params: ExecuteTradeParams): Promise<TradeRes
     sellerItemRef, buyerItemRef,
   } = params;
 
+  // 安全修复 VULN-BIZ-017：交易前再次校验挂单状态和买卖双方身份，防止 TOCTOU 竞态
+  const { data: preCheckListing, error: preCheckError } = await supabase
+    .from('cloud_market_listings')
+    .select('id, status, team_id, available_quantity')
+    .eq('id', listingId)
+    .single();
+  if (preCheckError || !preCheckListing) {
+    return { success: false, errorCode: 'LISTING_UNAVAILABLE', error: '挂单不存在' };
+  }
+  if (preCheckListing.status !== 'active') {
+    return { success: false, errorCode: 'LISTING_UNAVAILABLE', error: '挂单已下架或已售罄' };
+  }
+  if (preCheckListing.team_id === buyerTeamId) {
+    return { success: false, errorCode: 'LISTING_UNAVAILABLE', error: '不能购买自己的挂单' };
+  }
+
   // 1. 乐观锁扣买方积分
   if (pointsPaid > 0) {
     const { data: buyer } = await supabase
@@ -173,6 +189,11 @@ export async function executeTrade(params: ExecuteTradeParams): Promise<TradeRes
       if (pointsPaid > 0) await rollbackPoints(supabase, buyerTeamId, sellerTeamId, pointsPaid);
       return { success: false, errorCode: 'OWNERSHIP_CHANGED', error: '物品归属已变更' };
     }
+    // 防止已售作品被重复出售
+    if (submission.status === 'sold') {
+      if (pointsPaid > 0) await rollbackPoints(supabase, buyerTeamId, sellerTeamId, pointsPaid);
+      return { success: false, errorCode: 'OWNERSHIP_CHANGED', error: '作品已售出' };
+    }
     const { error: insErr } = await supabase.from('task_submissions').insert({
       team_id: buyerTeamId,
       task_id: submission.task_id,
@@ -186,13 +207,38 @@ export async function executeTrade(params: ExecuteTradeParams): Promise<TradeRes
       if (pointsPaid > 0) await rollbackPoints(supabase, buyerTeamId, sellerTeamId, pointsPaid);
       return { success: false, errorCode: 'INTERNAL', error: '复制作品失败' };
     }
+    // 标记卖方原 submission 为已售，防止无限复制
+    // 注意：需要在数据库中添加 sold_at 和 sold_to_team_id 字段
+    // 迁移文件：supabase/migrations/015_add_sold_fields_to_task_submissions.sql
+    await supabase
+      .from('task_submissions')
+      .update({
+        status: 'sold',
+        sold_at: new Date().toISOString(),
+        sold_to_team_id: buyerTeamId,
+      })
+      .eq('id', sellerItemRef);
   }
 
   // 3b. 兑换场景：买方物品转移给卖方
+  // 安全修复 VULN-BIZ-018：反向转移失败时回滚积分，避免扣积分不回滚导致数据不一致
   if (tradeType === 'barter' && barterItemType && buyerItemRef) {
     const reverseResult = await transferItem(supabase, barterItemType, buyerItemRef, buyerTeamId, sellerTeamId, barterQuantity || 1);
     if (!reverseResult.success) {
-      console.error('[market-trade] 兑换反向转移失败', reverseResult);
+      console.error('[market-trade] 兑换反向转移失败，开始回滚:', reverseResult);
+      // 回滚积分（如果已扣）
+      if (pointsPaid > 0) {
+        await rollbackPoints(supabase, buyerTeamId, sellerTeamId, pointsPaid);
+      }
+      // 回滚正向物品转移（卖方物品已转给买方，尝试转回）
+      // 注意：正向转移可能已部分完成，此处为尽力回滚
+      if (sellerItemRef) {
+        const rollbackResult = await transferItem(supabase, itemType, sellerItemRef, buyerTeamId, sellerTeamId, quantity);
+        if (!rollbackResult.success) {
+          console.error('[market-trade] 正向物品回滚也失败，存在物品不一致风险:', rollbackResult);
+        }
+      }
+      return { success: false, errorCode: 'INTERNAL', error: '兑换反向转移失败，已回滚积分' };
     }
   }
 
@@ -208,12 +254,18 @@ export async function executeTrade(params: ExecuteTradeParams): Promise<TradeRes
   }
   const newAvail = listing.available_quantity - quantity;
   const newStatus = newAvail <= 0 ? 'sold_out' : 'active';
-  const { error: updListingErr } = await supabase
+  const { data: updateResult, error: updListingErr } = await supabase
     .from('cloud_market_listings')
     .update({ available_quantity: newAvail, status: newStatus, updated_at: new Date().toISOString() })
-    .eq('id', listingId);
-  if (updListingErr) {
-    console.error('[market-trade] 更新挂单数量失败', updListingErr);
+    .eq('id', listingId)
+    .eq('available_quantity', listing.available_quantity)  // 乐观锁
+    .gt('available_quantity', 0)
+    .select('id');
+
+  if (updListingErr || !updateResult || updateResult.length === 0) {
+    // 库存已被其他并发购买改走，回滚积分
+    if (pointsPaid > 0) await rollbackPoints(supabase, buyerTeamId, sellerTeamId, pointsPaid);
+    return { success: false, errorCode: 'LISTING_UNAVAILABLE', error: '商品已被购买或库存不足' };
   }
 
   // 5. 写 cloud_market_trades

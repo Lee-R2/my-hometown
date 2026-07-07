@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseClient } from '@/storage/database/supabase-client';
-import { hashPassword, verifyPassword } from '@/lib/auth';
+import { hashPassword, verifyPassword, needsRehash, maskPhone } from '@/lib/auth';
 import { safeError } from '@/lib/api-auth';
 import { checkRateLimit, getClientIP } from '@/lib/rate-limit';
 import { ApiErrors } from '@/lib/api-error';
@@ -55,7 +55,7 @@ export async function POST(request: NextRequest) {
           rejectedReason: parent.review_remark || '未说明原因',
           parent: {
             id: parent.id,
-            phone: parent.phone,
+            phone: maskPhone(parent.phone),
             name: parent.name,
             school_id: parent.school_id,
             school_name: parent.school_name,
@@ -80,6 +80,18 @@ export async function POST(request: NextRequest) {
         { success: false, error: '密码错误' },
         { status: 401 }
       );
+    }
+
+    // 密码哈希为旧 SHA-256 算法时，登录成功后自动升级为 bcrypt
+    if (needsRehash(parent.password)) {
+      try {
+        await supabase
+          .from('parents')
+          .update({ password: hashPassword(password), updated_at: new Date().toISOString() })
+          .eq('id', parent.id);
+      } catch {
+        // 升级失败不影响登录流程
+      }
     }
 
     // 获取关注的小队列表（包含历史记录）
@@ -108,7 +120,7 @@ export async function POST(request: NextRequest) {
       success: true,
       parent: {
         id: parent.id,
-        phone: parent.phone,
+        phone: maskPhone(parent.phone),
         name: parent.name,
         school_id: parent.school_id,
         school_name: parent.school_name
@@ -159,7 +171,7 @@ export async function PUT(request: NextRequest) {
           .from('parents')
           .update({
             name,
-            password,
+            password: hashPassword(password),
             school_id: school_id || null,
             school_name: school_name || null,
             relation: relation || null,
@@ -252,7 +264,7 @@ export async function PUT(request: NextRequest) {
       success: true,
       parent: {
         id: newParent.id,
-        phone: newParent.phone,
+        phone: maskPhone(newParent.phone),
         name: newParent.name,
         school_id: newParent.school_id,
         school_name: newParent.school_name

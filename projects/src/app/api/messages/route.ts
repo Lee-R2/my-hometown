@@ -321,6 +321,12 @@ export async function POST(request: NextRequest) {
       return ApiErrors.validation('请选择接收对象');
     }
 
+    // 安全修复（P3 输入校验）：限制消息内容长度，避免超长输入
+    const MAX_MESSAGE_CONTENT_LENGTH = 2000;
+    if (typeof content === 'string' && content.length > MAX_MESSAGE_CONTENT_LENGTH) {
+      return ApiErrors.validation(`消息内容过长，最大支持 ${MAX_MESSAGE_CONTENT_LENGTH} 字符`);
+    }
+
     // 根据目标类型构建消息数据
     let messagesToInsert: any[] = [];
 

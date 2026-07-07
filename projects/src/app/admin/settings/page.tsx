@@ -354,6 +354,7 @@ export default function AdminSettingsPage() {
                           {module.icon === 'Award' && '🏆'}
                           {module.icon === 'Settings' && '⚙️'}
                           {module.icon === 'MessageSquare' && '📝'}
+                          {module.icon === 'ShoppingBag' && '🛍️'}
                         </span>
                       </div>
                       <div>

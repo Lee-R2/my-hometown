@@ -204,7 +204,7 @@ export const SECURITY_HEADERS_CONFIG = {
   'Permissions-Policy': 'geolocation=(), microphone=(), camera=(), payment=(), usb=()',
   /** 内容安全策略（可选） */
   'Content-Security-Policy': process.env.NODE_ENV === 'production'
-    ? "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline';"
+    ? "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline';"
     : undefined,
   /** 严格传输安全（仅 HTTPS） */
   'Strict-Transport-Security': process.env.NODE_ENV === 'production'

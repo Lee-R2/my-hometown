@@ -4,7 +4,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { X, Send, Loader2, BarChart3, Users, TrendingUp, AlertTriangle, Mic, MicOff, Volume2, VolumeX, Square, Image, FileText, Film, Paperclip, FileDown, ChevronRight, Lightbulb } from 'lucide-react';
+import { X, Send, Loader2, BarChart3, Users, TrendingUp, AlertTriangle, Mic, MicOff, Volume2, VolumeX, Square, Image, FileText, Film, Paperclip, FileDown, ChevronRight, Lightbulb, Minimize2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { subscribeAssistantContext } from '@/lib/assistant-context';
 
@@ -41,17 +41,18 @@ export default function AdminAssistant({
   const [isLoading, setIsLoading] = useState(false);
   const [sessionId, setSessionId] = useState<string>(''); // 会话ID，用于记忆系统
   
-  // 初始化会话ID（基于userId生成固定会话）
+  // 初始化会话ID（基于userId生成会话）
+  // 使用 sessionStorage：关闭标签即清空，重新进入算新会话（符合"账号登录到退出期间连贯，退出再进入算新对话"的需求）
   useEffect(() => {
     if (userId && !sessionId) {
-      const storedSessionId = localStorage.getItem(`laxiang_session_${userId}`);
+      const storedSessionId = sessionStorage.getItem(`laxiang_session_${userId}`);
       if (storedSessionId) {
         setSessionId(storedSessionId);
       } else {
         // 首次使用，生成新会话
-        const newSessionId = `laxiang_user_${userId}`;
+        const newSessionId = `laxiang_${userId}_${Date.now()}`;
         setSessionId(newSessionId);
-        localStorage.setItem(`laxiang_session_${userId}`, newSessionId);
+        sessionStorage.setItem(`laxiang_session_${userId}`, newSessionId);
       }
     }
   }, [userId, sessionId]);
@@ -189,6 +190,10 @@ export default function AdminAssistant({
         }),
       });
 
+      if (!response.ok) {
+        throw new Error(`语音合成失败 (${response.status})`);
+      }
+
       const data = await response.json();
 
       if (data.success && data.audioUri) {
@@ -249,6 +254,10 @@ export default function AdminAssistant({
           method: 'POST',
           body: formData,
         });
+
+        if (!response.ok) {
+          throw new Error(`上传失败 (${response.status})`);
+        }
 
         const data = await response.json();
 
@@ -474,6 +483,10 @@ export default function AdminAssistant({
         }),
       });
 
+      if (!response.ok) {
+        throw new Error(`语音识别失败 (${response.status})`);
+      }
+
       const data = await response.json();
 
       if (data.success && data.text) {
@@ -540,6 +553,7 @@ export default function AdminAssistant({
       if (newSessionId && newSessionId !== sessionId) {
         console.log('[蜡象助手] 更新会话ID:', sessionId, '->', newSessionId);
         setSessionId(newSessionId);
+        sessionStorage.setItem(`laxiang_session_${userId}`, newSessionId);
       }
 
       if (!response.ok) {
@@ -1016,7 +1030,7 @@ export default function AdminAssistant({
                     <VolumeX className="h-5 w-5" />
                   )}
                 </Button>
-                {/* 关闭按钮 */}
+                {/* 最小化按钮 */}
                 <Button
                   variant="ghost"
                   size="sm"
@@ -1027,8 +1041,9 @@ export default function AdminAssistant({
                     stopSpeaking();
                     setIsOpen(false);
                   }}
+                  title="最小化"
                 >
-                  <X className="h-5 w-5" />
+                  <Minimize2 className="h-5 w-5" />
                 </Button>
               </div>
             </CardHeader>

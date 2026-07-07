@@ -33,6 +33,7 @@ import {
   ChevronDown,
   ChevronUp,
   Settings,
+  ShoppingCart,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useScrollPosition } from "@/hooks/use-scroll-position";
@@ -784,6 +785,10 @@ export default function TeamDashboard() {
 
   // 退出登录
   const handleLogout = () => {
+    // 清空银蛇博士会话ID，保证退出再进入是新对话
+    if (team?.id) {
+      sessionStorage.removeItem(`yinshe_session_${team.id}`);
+    }
     localStorage.removeItem("team");
     window.location.href = "/";
   };
@@ -1422,15 +1427,27 @@ export default function TeamDashboard() {
                     <p className="text-sm font-medium">消息中心</p>
                     {unreadCount > 0 && <p className="text-xs text-red-500">{unreadCount}条未读</p>}
                   </div>
-                  <div
-                    className="flex flex-col items-center p-3 bg-sky-50 rounded-xl cursor-pointer hover:bg-sky-100 transition-colors"
-                    onClick={() => navigate("/team/market")}
-                  >
-                    <div className="w-10 h-10 bg-sky-100 rounded-xl flex items-center justify-center mb-2">
-                      <ShoppingCart className="w-5 h-5 text-sky-600" />
-                    </div>
-                    <p className="text-sm font-medium">云朵市集</p>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* 云朵市集 - 独立卡片 */}
+          {hasAllRoles && (
+            <Card className="border-0 shadow-lg bg-gradient-to-br from-sky-50 to-cyan-50">
+              <CardContent className="p-4">
+                <div
+                  className="flex items-center gap-4 cursor-pointer"
+                  onClick={() => navigate("/team/market")}
+                >
+                  <div className="w-14 h-14 bg-sky-100 rounded-2xl flex items-center justify-center shrink-0">
+                    <ShoppingCart className="w-7 h-7 text-sky-600" />
                   </div>
+                  <div className="flex-1">
+                    <p className="font-semibold text-base text-sky-900">云朵市集</p>
+                    <p className="text-sm text-sky-700">出售、购买、兑换技能/工具/作品</p>
+                  </div>
+                  <ChevronDown className="w-5 h-5 text-sky-400 -rotate-90" />
                 </div>
               </CardContent>
             </Card>

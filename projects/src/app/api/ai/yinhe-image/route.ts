@@ -4,6 +4,7 @@ import { ImageGenerationClient, Config, HeaderUtils } from 'coze-coding-dev-sdk'
 import { uploadFile, generateSignedUrl } from '@/lib/storage-utils';
 import { ApiErrors } from '@/lib/api-error';
 import { AI_API_KEY, AI_BASE_URL, AI_MODEL_BASE_URL } from '@/lib/ai-config';
+import { checkAiRateLimit } from '@/lib/rate-limit';
 
 /**
  * 银蛇博士图片生成 API
@@ -13,6 +14,14 @@ import { AI_API_KEY, AI_BASE_URL, AI_MODEL_BASE_URL } from '@/lib/ai-config';
 export async function POST(request: NextRequest) {
   const auth = requireAnyAuth(request);
   if (!auth.authenticated) return authError(auth);
+
+  const rateLimit = await checkAiRateLimit(request, auth.payload?.userId, 'ai_image');
+  if (!rateLimit.allowed) {
+    return NextResponse.json(
+      { success: false, error: rateLimit.message },
+      { status: 429 }
+    );
+  }
 
   try {
     const { prompt, size = '2K', teamId, taskContext } = await request.json();

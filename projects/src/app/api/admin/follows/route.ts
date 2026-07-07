@@ -85,7 +85,7 @@ export async function GET(request: NextRequest) {
       parent: parentsMap[r.parent_id] ? {
         id: parentsMap[r.parent_id].id,
         name: parentsMap[r.parent_id].name,
-        phone: parentsMap[r.parent_id].phone
+        phone: maskPhone(parentsMap[r.parent_id].phone)
       } : null,
       team: teamsMap[r.team_id] ? {
         id: teamsMap[r.team_id].id,

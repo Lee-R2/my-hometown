@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseClient } from '@/storage/database/supabase-client';
-import { verifyPassword } from '@/lib/security';
+import { verifyPassword, hashPassword, needsRehash } from '@/lib/security';
 import { checkRateLimit, logRequest, getClientIP } from '@/lib/rate-limit';
 import { createSession, setSessionCookie } from '@/lib/session';
 import { safeError } from '@/lib/api-auth';
@@ -88,6 +88,18 @@ export async function POST(request: NextRequest) {
         { error: '密码错误', field: 'password' },
         { status: 401 }
       );
+    }
+
+    // 4.1 若密码哈希为旧 SHA-256 算法，登录成功后自动升级为 bcrypt
+    if (needsRehash(team.password)) {
+      try {
+        await client
+          .from('teams')
+          .update({ password: hashPassword(password), updated_at: new Date().toISOString() })
+          .eq('id', team.id);
+      } catch {
+        // 升级失败不影响登录流程
+      }
     }
 
     // 5. 检查小队状态（NULL 或 true 视为活跃，false 视为禁用）

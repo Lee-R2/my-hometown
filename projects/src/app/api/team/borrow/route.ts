@@ -206,6 +206,11 @@ export async function PUT(request: NextRequest) {
       return ApiErrors.validation('该申请已被处理');
     }
 
+    // 只有出借方可以审批借款，防止 IDOR
+    if (borrowRecord.lender_id !== auth.payload!.userId) {
+      return ApiErrors.forbidden('只有出借方可以审批借款');
+    }
+
     if (action === 'reject') {
       // 拒绝申请，记录拒绝原因
       await supabase
@@ -282,25 +287,55 @@ export async function PUT(request: NextRequest) {
         .select('id');
 
       if (creditError || !creditedBorrower || creditedBorrower.length === 0) {
-        // 借入方加积分失败，需要回滚借出方扣减的积分
-        await supabase
+        // 借入方加积分失败，需要回滚借出方扣减的积分（带乐观锁，避免覆盖并发变更）
+        const rollbackResult = await supabase
           .from('teams')
           .update({ points: lenderTeam.points })
-          .eq('id', borrowRecord.lender_id);
+          .eq('id', borrowRecord.lender_id)
+          .eq('points', lenderTeam.points - borrowPointsInt)
+          .select('id');
+        if (!rollbackResult.data || rollbackResult.data.length === 0) {
+          // 回滚失败说明积分已被其他请求修改，记录告警日志
+          console.error('[borrow/approve] 回滚借出方积分失败，可能产生积分差异', {
+            lenderId: borrowRecord.lender_id,
+            expectedPoints: lenderTeam.points,
+            deductedPoints: lenderTeam.points - borrowPointsInt
+          });
+        }
         return NextResponse.json(
           { success: false, error: '操作冲突，请重试' },
           { status: 409 }
         );
       }
 
-      // 更新借用记录状态
-      await supabase
+      // 更新借用记录状态（带乐观锁，防止 TOCTOU 竞态导致双重处理）
+      const { data: statusUpdate, error: statusError } = await supabase
         .from('point_borrows')
-        .update({ 
+        .update({
           status: 'approved',
           approved_at: new Date().toISOString()
         })
-        .eq('id', borrow_id);
+        .eq('id', borrow_id)
+        .eq('status', 'pending')
+        .select('id');
+
+      if (statusError || !statusUpdate || statusUpdate.length === 0) {
+        // 状态已被并发请求处理，需回滚积分转移
+        await supabase
+          .from('teams')
+          .update({ points: lenderTeam.points })
+          .eq('id', borrowRecord.lender_id)
+          .eq('points', lenderTeam.points - borrowPointsInt);
+        await supabase
+          .from('teams')
+          .update({ points: borrowerCurrentPoints })
+          .eq('id', borrowRecord.borrower_id)
+          .eq('points', borrowerCurrentPoints + borrowPointsInt);
+        return NextResponse.json(
+          { success: false, error: '该申请已被并发处理，请刷新后重试' },
+          { status: 409 }
+        );
+      }
 
       // 记录积分变动（integer 列）
       await supabase.from('point_transactions').insert({

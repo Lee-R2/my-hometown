@@ -223,4 +223,7 @@ export const ApiErrors = {
 
   externalError: (message = '外部服务暂时不可用'): NextResponse =>
     errorResponse({ code: 'EXTERNAL_ERROR', message, retryable: true }),
+
+  internal: (message = '服务器内部错误，请稍后重试'): NextResponse =>
+    errorResponse({ code: 'INTERNAL', message, retryable: true }),
 };

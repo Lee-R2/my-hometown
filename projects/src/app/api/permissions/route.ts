@@ -76,16 +76,21 @@ export async function GET(request: NextRequest) {
       
       const configs: RoleConfig[] = data.map(item => {
         const config = item.config || {};
-        const allModulePermissions = MODULES.map(m => ({
-          moduleId: m.id,
-          level: config.permissions?.find((p: any) => p.moduleId === m.id)?.level || 'none'
-        }));
-        
+        const defaultConfig = DEFAULT_ROLE_CONFIGS.find(c => c.role === item.role);
+        const allModulePermissions = MODULES.map(m => {
+          const dbLevel = config.permissions?.find((p: any) => p.moduleId === m.id)?.level;
+          const defaultLevel = defaultConfig?.permissions?.find((p: any) => p.moduleId === m.id)?.level;
+          return {
+            moduleId: m.id,
+            level: dbLevel || defaultLevel || 'none'
+          };
+        });
+
         return {
           role: item.role as RoleType,
-          name: config.name || item.role,
-          description: config.description || '',
-          dataScope: config.dataScope || 'all',
+          name: config.name || defaultConfig?.name || item.role,
+          description: config.description || defaultConfig?.description || '',
+          dataScope: config.dataScope || defaultConfig?.dataScope || 'all',
           permissions: allModulePermissions
         };
       });
@@ -125,7 +130,12 @@ export async function POST(request: NextRequest) {
     if (!validRoles.includes(role)) {
       return ApiErrors.validation('无效的角色');
     }
-    
+
+    // 仅 super_admin 可修改 super_admin 角色的权限配置
+    if (role === 'super_admin' && auth.payload!.role !== 'super_admin') {
+      return ApiErrors.forbidden('仅超级管理员可修改超级管理员权限配置');
+    }
+
     const { permissions, dataScope } = config;
     if (!Array.isArray(permissions)) {
       return ApiErrors.validation('权限配置格式错误');

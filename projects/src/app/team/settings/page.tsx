@@ -106,6 +106,10 @@ export default function TeamSettingsPage() {
   };
 
   const handleLogout = () => {
+    // 清空银蛇博士会话ID，保证退出再进入是新对话
+    if (team?.id) {
+      sessionStorage.removeItem(`yinshe_session_${team.id}`);
+    }
     localStorage.removeItem('team');
     router.push('/');
   };

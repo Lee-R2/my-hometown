@@ -50,12 +50,43 @@ export async function GET(request: NextRequest) {
 }
 
 // POST: 创建或更新用户记忆
+// 注意：scheduler.js 调用 cleanup action 时不带认证，需在认证检查前处理
 export async function POST(request: NextRequest) {
-  const auth = requireAnyAuth(request);
-  if (!auth.authenticated) return authError(auth);
-
   try {
     const body = await request.json();
+
+    // 定时任务清理：归档长期未更新且低重要性的用户记忆
+    // scheduler.js (memory-distiller) 每日 03:00 调用，不携带认证
+    if (body.action === 'cleanup') {
+      const supabase = getSupabaseClient();
+      const now = new Date();
+      // 90 天未更新且重要性 < 3 的记忆归档（软删除）
+      const threshold = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000).toISOString();
+
+      const { data: archived, error } = await supabase
+        .from('user_memories')
+        .update({ is_active: false, updated_at: now.toISOString() })
+        .eq('is_active', true)
+        .lt('importance', 3)
+        .lt('updated_at', threshold)
+        .select('id');
+
+      if (error) {
+        console.error('[用户记忆API] cleanup 失败:', error);
+        return NextResponse.json({ success: false, error: '清理失败' }, { status: 500 });
+      }
+
+      return NextResponse.json({
+        success: true,
+        cleaned: archived?.length || 0,
+        timestamp: now.toISOString(),
+      });
+    }
+
+    // 普通写入流程需要认证
+    const auth = requireAnyAuth(request);
+    if (!auth.authenticated) return authError(auth);
+
     const { userId, agentType, category, key, value, importance, source } = body;
 
     if (!userId || !category || !key || !value) {

@@ -123,11 +123,20 @@ export async function POST(request: NextRequest) {
       .select('id');
 
     if (lenderError || !creditedLender || creditedLender.length === 0) {
-      // 借出方加积分失败，回滚借入方扣减的积分
-      await supabase
+      // 借出方加积分失败，回滚借入方扣减的积分（带乐观锁，避免覆盖并发变更）
+      const rollbackResult = await supabase
         .from('teams')
         .update({ points: borrowerPoints })
-        .eq('id', team_id);
+        .eq('id', team_id)
+        .eq('points', newBorrowerPoints)
+        .select('id');
+      if (!rollbackResult.data || rollbackResult.data.length === 0) {
+        console.error('[repay] 回滚借入方积分失败，可能产生积分差异', {
+          borrowerId: team_id,
+          expectedPoints: borrowerPoints,
+          deductedPoints: newBorrowerPoints
+        });
+      }
       console.error('[repay] 增加借出方积分失败', lenderError);
       return NextResponse.json(
         { success: false, error: '操作冲突，请重试' },
@@ -135,16 +144,38 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 更新借用记录状态
+    // 更新借用记录状态（带乐观锁，防止 TOCTOU 竞态导致双重处理）
     const newStatus = isPartialRepay ? 'partial_repaid' : 'repaid';
-    await supabase
+    const unpaidPoints = isPartialRepay ? r1(totalRepay - actualDeduct) : 0;
+    const { data: statusUpdate, error: statusError } = await supabase
       .from('point_borrows')
       .update({
         status: newStatus,
         repaid_at: new Date().toISOString(),
-        actual_points: actualDeduct
+        actual_points: actualDeduct,
+        unpaid_points: unpaidPoints
       })
-      .eq('id', borrow_id);
+      .eq('id', borrow_id)
+      .in('status', ['approved', 'overdue'])
+      .select('id');
+
+    if (statusError || !statusUpdate || statusUpdate.length === 0) {
+      // 状态已被并发请求处理，需回滚双方积分转移
+      await supabase
+        .from('teams')
+        .update({ points: borrowerPoints })
+        .eq('id', team_id)
+        .eq('points', newBorrowerPoints);
+      await supabase
+        .from('teams')
+        .update({ points: lenderCurrentPoints })
+        .eq('id', borrowRecord.lender_id)
+        .eq('points', newLenderPoints);
+      return NextResponse.json(
+        { success: false, error: '该借款已被并发处理，请刷新后重试' },
+        { status: 409 }
+      );
+    }
 
     // 记录积分变动
     const repayDesc = isPartialRepay

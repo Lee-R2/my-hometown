@@ -85,11 +85,14 @@ export async function getCrossAgentMemories(
   if (teamIds.length === 0) return result;
 
   try {
+    // 过滤已过期的 L1 短期记忆
+    const nowIso = new Date().toISOString();
     let query = client
       .from('agent_memories')
       .select('*')
       .eq('agent_id', agentId)
       .in('team_id', teamIds)
+      .or(`expires_at.is.null,expires_at.gt.${nowIso}`)
       .order('created_at', { ascending: false })
       .limit(limit);
 
@@ -350,11 +353,14 @@ export async function getMemoriesByImportance(
   const client = getSupabaseClient();
   
   try {
+    // 过滤已过期的 L1 短期记忆
+    const nowIso = new Date().toISOString();
     const { data: memories } = await client
       .from('agent_memories')
       .select('*')
       .eq('scope_type', 'user_id')
       .eq('scope_id', userId)
+      .or(`expires_at.is.null,expires_at.gt.${nowIso}`)
       .order('importance', { ascending: false, nullsFirst: false })
       .order('created_at', { ascending: false })
       .limit(limit);

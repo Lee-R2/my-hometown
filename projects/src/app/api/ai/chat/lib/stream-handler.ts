@@ -19,6 +19,8 @@ export interface StreamHandlerContext {
   currentSessionId: string;
   temperature: number;
   model: string;
+  /** 内部 API 调用时透传的认证头（Authorization/Cookie），避免内部 fetch 被认证拦截 */
+  authHeaders?: Record<string, string>;
 }
 
 /**
@@ -28,8 +30,11 @@ export interface StreamHandlerContext {
 export function createStreamResponse(ctx: StreamHandlerContext): Response {
   const {
     client, fullMessages, assistantType, userId, userRole, teamId,
-    contextData, agentInfo, currentSessionId, temperature, model
+    contextData, agentInfo, currentSessionId, temperature, model, authHeaders
   } = ctx;
+
+  // 内部 fetch 默认 headers：优先使用透传的 authHeaders，否则仅 Content-Type
+  const internalHeaders = authHeaders || { 'Content-Type': 'application/json' };
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
@@ -61,7 +66,7 @@ export function createStreamResponse(ctx: StreamHandlerContext): Response {
               try {
                 const daRes = await fetch(`${process.env.COZE_PROJECT_DOMAIN_DEFAULT || 'http://localhost:5000'}/api/ai/data-analysis`, {
                   method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
+                  headers: internalHeaders,
                   body: JSON.stringify({
                     question: daQuestion,
                     role: assistantType === 'laxiang' ? 'wax-elephant' : 'dr-snake',
@@ -95,7 +100,7 @@ export function createStreamResponse(ctx: StreamHandlerContext): Response {
             try {
               const reflRes = await fetch(`${process.env.COZE_PROJECT_DOMAIN_DEFAULT || 'http://localhost:5000'}/api/ai/reflection`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: internalHeaders,
                 body: JSON.stringify({
                   action: 'reflect',
                   agentId: assistantType === 'laxiang' ? 'laxiang_zhushou' : 'dr_silver_snake',
@@ -119,7 +124,7 @@ export function createStreamResponse(ctx: StreamHandlerContext): Response {
             try {
               const statsRes = await fetch(`${process.env.COZE_PROJECT_DOMAIN_DEFAULT || 'http://localhost:5000'}/api/ai/reflection`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: internalHeaders,
                 body: JSON.stringify({
                   action: 'stats',
                   agentId: assistantType === 'laxiang' ? 'laxiang_zhushou' : 'dr_silver_snake',
@@ -157,7 +162,7 @@ export function createStreamResponse(ctx: StreamHandlerContext): Response {
                   const layer = parseInt(layerMatch[1]);
                   const memType = typeMatch[1];
                   const memVal = contentMatch[1].trim();
-                  const agentName = assistantType === 'yinhe' ? 'dr-silver-snake' : 'wax-elephant';
+                  const agentName = assistantType === 'yinhe' ? 'yinshe_boshi' : 'laxiang_zhushou';
 
                   const { getSupabaseClient } = await import('@/storage/database/supabase-client');
                   const supabase = getSupabaseClient();
@@ -167,13 +172,14 @@ export function createStreamResponse(ctx: StreamHandlerContext): Response {
                     memory_type: memType,
                     content: memVal,
                     layer: Math.min(4, Math.max(0, layer)),
-                    importance: layer >= 3 ? 0.9 : layer >= 2 ? 0.6 : 0.3,
+                    importance: layer >= 3 ? 8 : layer >= 2 ? 5 : 3,
+                    status: 'active',
                     created_at: new Date().toISOString()
                   });
                   controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: 'memory_saved', layer, memoryType: memType })}\n\n`));
                 }
               } else if (memAction === '查询' && memContent) {
-                const agentName = assistantType === 'yinhe' ? 'dr-silver-snake' : 'wax-elephant';
+                const agentName = assistantType === 'yinhe' ? 'yinshe_boshi' : 'laxiang_zhushou';
                 const layerFilter = memContent.match(/L(\d)/);
                 const typeFilter = memContent.match(/类型:(\w+)/);
 
@@ -207,7 +213,7 @@ export function createStreamResponse(ctx: StreamHandlerContext): Response {
 
               const createRes = await fetch(`http://localhost:${process.env.DEPLOY_RUN_PORT || 5000}/api/ai/create-theme`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: internalHeaders,
                 body: JSON.stringify({ ...themeData, userId, userRole })
               });
               const createResult = await createRes.json();
@@ -241,7 +247,7 @@ export function createStreamResponse(ctx: StreamHandlerContext): Response {
             console.log('[银蛇博士] 回复中包含图片生成请求');
           }
 
-          const mediaResults = await processMediaCommands(fullResponse, teamId || '');
+          const mediaResults = await processMediaCommands(fullResponse, teamId || '', internalHeaders);
           console.log('[银蛇博士] 媒体生成结果:', mediaResults.length, '个');
 
           for (const result of mediaResults) {
@@ -256,25 +262,33 @@ export function createStreamResponse(ctx: StreamHandlerContext): Response {
         controller.enqueue(encoder.encode('data: [DONE]\n\n'));
         console.log('[银蛇博士] [DONE] 已发送');
 
-        // 保存助手回复到记忆系统
-        if (fullResponse) {
-          await saveToMemory(
-            agentInfo.username,
-            currentSessionId,
-            'assistant',
-            fullResponse,
-            userId,
-            userRole
-          );
+        // 关键：发送完 [DONE] 后立即关闭流，避免连接挂起导致客户端超时
+        controller.close();
 
-          // 如果是银蛇博士，自动提取反馈并发送给蜡象助手
-          if (agentInfo.username === 'yinhe_boshi') {
-            await extractAndForwardFeedback(fullResponse, {
-              teamId,
-              themeId: contextData?.context?.team?.current_theme_id,
-              themeName: contextData?.context?.theme?.name,
-              teamName: contextData?.context?.team?.name
-            });
+        // 后续处理（保存记忆、提取反馈）在流关闭后异步执行，不阻塞响应
+        if (fullResponse) {
+          try {
+            await saveToMemory(
+              agentInfo.username,
+              currentSessionId,
+              'assistant',
+              fullResponse,
+              userId,
+              userRole
+            );
+
+            // 如果是银蛇博士，自动提取反馈并发送给蜡象助手
+            if (agentInfo.username === 'yinhe_boshi') {
+              await extractAndForwardFeedback(fullResponse, {
+                teamId,
+                themeId: contextData?.context?.team?.current_theme_id,
+                themeName: contextData?.context?.theme?.name,
+                teamName: contextData?.context?.team?.name
+              }, internalHeaders);
+            }
+          } catch (postError) {
+            // 后处理失败不影响已返回的响应
+            console.error('[流式响应] 后处理（记忆保存/反馈提取）失败:', postError);
           }
         }
       } catch (error) {

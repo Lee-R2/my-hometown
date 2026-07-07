@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { uploadFile, generateSignedUrl } from '@/lib/storage-utils';
 import { checkRateLimit, getClientIP } from '@/lib/rate-limit';
 import { ApiErrors } from '@/lib/api-error';
+import { isDangerousExtension } from '@/lib/security';
 
 // 图片上传API（支持图片和视频）
 export async function POST(request: NextRequest) {
@@ -30,13 +31,20 @@ export async function POST(request: NextRequest) {
       return ApiErrors.validation('未找到上传文件');
     }
 
+    // 安全修复（P3 输入校验）：扩展名黑名单校验，禁止可执行脚本/可含 XSS 的文件
+    if (isDangerousExtension(file.name)) {
+      return NextResponse.json({
+        error: '不支持的文件类型，禁止上传可执行脚本或可含脚本的文件（exe/bat/cmd/sh/php/js/html/svg）'
+      }, { status: 400 });
+    }
+
     // 根据上传类型验证文件类型
     const imageAllowedTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
     const videoAllowedTypes = ['video/mp4', 'video/webm', 'video/quicktime', 'video/x-msvideo'];
     const allowedTypes = isVideo ? videoAllowedTypes : imageAllowedTypes;
 
     if (!allowedTypes.includes(file.type)) {
-      return NextResponse.json({ 
+      return NextResponse.json({
         error: isVideo
           ? '不支持的文件类型，仅支持 MP4、WebM、MOV、AVI 格式的视频'
           : '不支持的文件类型，仅支持 JPG、PNG、GIF、WebP 格式的图片'

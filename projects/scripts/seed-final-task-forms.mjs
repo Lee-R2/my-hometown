@@ -1,10 +1,12 @@
+import dotenv from 'dotenv';
+dotenv.config({ path: '.env.local' });
+
 /**
  * 种子脚本：创建三个角色的最后任务表单（基于学生人工智能素养水平量表_后测）
  * 运行方式: node scripts/seed-final-task-forms.mjs
  */
-
 const SUPABASE_URL = 'https://emfluysvhghloklrmcxi.supabase.co';
-const SUPABASE_SERVICE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVtZmx1eXN2aGdobG9rbHJtY3hpIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3OTgwMTYzMywiZXhwIjoyMDk1Mzc3NjMzfQ.qDB8GMxGBMW7XMJfMSjOc-8SBhxUkgH91INa9MQ7gJ0';
+const SUPABASE_SERVICE_KEY = process.env.COZE_SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 // 简易 Supabase REST 客户端
 async function sbFrom(table) {

@@ -18,6 +18,7 @@ import {
   internalizeReadArticles,
   getInternalizedSkills,
 } from '@/lib/skills/inkwell-reader/knowledge-internalizer';
+import { checkAiRateLimit } from '@/lib/rate-limit';
 
 const AGENT_NAMES: Record<string, string> = {
   'dr-silver-snake': '银蛇博士',
@@ -113,6 +114,14 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   const auth = requireAdmin(request);
   if (!auth.authenticated) return authError(auth);
+
+  const rateLimit = await checkAiRateLimit(request, auth.payload?.userId, 'ai_inkwell');
+  if (!rateLimit.allowed) {
+    return NextResponse.json(
+      { success: false, error: rateLimit.message },
+      { status: 429 }
+    );
+  }
 
   try {
     const body = await request.json();

@@ -5,34 +5,41 @@
  * 原文件保持不变，本模块仅创建不引用。
  */
 
-export async function processMediaCommands(fullResponse: string, teamId: string): Promise<any[]> {
+export async function processMediaCommands(
+  fullResponse: string,
+  teamId: string,
+  authHeaders?: Record<string, string>
+): Promise<any[]> {
   const results: any[] = [];
-  
+
   console.log('[银蛇博士] processMediaCommands 被调用');
   console.log('[银蛇博士] 回复内容预览:', fullResponse.substring(0, 500));
+
+  // 内部 fetch 默认 headers：优先使用透传的 authHeaders
+  const internalHeaders = authHeaders || { 'Content-Type': 'application/json' };
 
   // 检测图片生成命令
   const imageCommandRegex = /\[生成图片\]\s*prompt:([^|]+)(?:\|.*)?/gi;
   const imageMatches = fullResponse.match(imageCommandRegex);
   console.log('[银蛇博士] 检测到图片命令:', imageMatches?.length || 0);
-  
+
   let imageMatch;
   while ((imageMatch = imageCommandRegex.exec(fullResponse)) !== null) {
     const prompt = imageMatch[1].trim();
     console.log('[银蛇博士] 提取到的 prompt:', prompt);
     try {
-      const baseUrl = process.env.DEPLOY_RUN_PORT 
-        ? `http://localhost:${process.env.DEPLOY_RUN_PORT}` 
+      const baseUrl = process.env.DEPLOY_RUN_PORT
+        ? `http://localhost:${process.env.DEPLOY_RUN_PORT}`
         : 'http://localhost:5000';
-      
+
       const response = await fetch(`${baseUrl}/api/ai/yinhe-image`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: internalHeaders,
         body: JSON.stringify({ prompt, teamId })
       });
 
       const data = await response.json();
-      
+
       if (data.success && data.imageUrls && data.imageUrls.length > 0) {
         results.push({
           type: 'image_generated',
@@ -53,20 +60,20 @@ export async function processMediaCommands(fullResponse: string, teamId: string)
     const prompt = videoMatch[1].trim();
     const duration = videoMatch[2] ? parseInt(videoMatch[2]) : 5;
     const ratio = videoMatch[3] || '16:9';
-    
+
     try {
-      const baseUrl = process.env.DEPLOY_RUN_PORT 
-        ? `http://localhost:${process.env.DEPLOY_RUN_PORT}` 
+      const baseUrl = process.env.DEPLOY_RUN_PORT
+        ? `http://localhost:${process.env.DEPLOY_RUN_PORT}`
         : 'http://localhost:5000';
-      
+
       const response = await fetch(`${baseUrl}/api/ai/yinhe-video`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: internalHeaders,
         body: JSON.stringify({ prompt, duration, ratio, teamId })
       });
 
       const data = await response.json();
-      
+
       if (data.success && data.videoUrl) {
         results.push({
           type: 'video_generated',
@@ -92,30 +99,36 @@ export async function extractAndForwardFeedback(
     themeId?: string;
     themeName?: string;
     teamName?: string;
-  }
+  },
+  authHeaders?: Record<string, string>
 ) {
   try {
     // 提取 [反馈] 标记的内容
     const feedbackRegex = /\[反馈\]\s*类型：\{([^}]+)\}\s*\|\s*内容：\{([^}]+)\}/g;
     const matches = [...responseContent.matchAll(feedbackRegex)];
-    
+
     if (matches.length === 0) {
       return; // 没有反馈，直接返回
     }
 
+    // 内部 fetch 默认 headers：优先使用透传的 authHeaders
+    const internalHeaders = authHeaders || { 'Content-Type': 'application/json' };
+    // 添加内部服务标识，允许以 yinhe_boshi 身份发送反馈（agent-communication POST 会校验此 header）
+    internalHeaders['X-Internal-Service'] = 'chat-stream';
+
     // 发送到跨智能体通信 API
     for (const match of matches) {
       const [, type, content] = match;
-      
+
       // 构造发送给蜡象助手的消息
       const message = `【小队反馈】\n类型：${type}\n小队：${context.teamName || '未知小队'}\n主题：${context.themeName || '未知主题'}\n内容：${content}`;
-      
+
       try {
         await fetch(
           `${process.env.DEPLOY_RUN_PORT ? `http://localhost:${process.env.DEPLOY_RUN_PORT}` : 'http://localhost:5000'}/api/ai/agent-communication`,
           {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: internalHeaders,
             body: JSON.stringify({
               sender: 'yinhe_boshi',
               receiver: 'laxiang_zhushou',

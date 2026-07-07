@@ -171,13 +171,13 @@ export async function GET(
           likeCounts.set(like.submission_id, count + 1);
         });
 
-        // 如果有当前小队ID，查询是否已点赞
+        // 如果有当前小队ID，查询是否已点赞（team_id 字段存储点赞者）
         let likedSubmissionIds = new Set<string>();
         if (fromTeamId) {
           const { data: myLikes } = await client
             .from('likes')
             .select('submission_id')
-            .eq('from_team_id', fromTeamId)
+            .eq('team_id', fromTeamId)
             .in('submission_id', submissionIds);
           (myLikes || []).forEach(like => likedSubmissionIds.add(like.submission_id));
         }

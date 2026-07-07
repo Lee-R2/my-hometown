@@ -87,6 +87,11 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
       return ApiErrors.notFound('提交记录不存在');
     }
 
+    // 状态守卫：已审核的提交不可重复审核
+    if (submission.status !== 'pending') {
+      return ApiErrors.validation('该提交已审核，不可重复审核');
+    }
+
     // 获取小队信息
     const { data: teamData } = await client
       .from('teams')
@@ -163,6 +168,12 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
         .single();
 
       const taskPoints = task?.points || 10;
+
+      // 额外积分范围校验（0-5）
+      if (bonusPoints < 0 || bonusPoints > 5) {
+        return ApiErrors.validation('额外积分必须在 0-5 之间');
+      }
+
       const totalPoints = taskPoints + bonusPoints; // 基础分 + 额外加分
 
       // 获取小队当前积分

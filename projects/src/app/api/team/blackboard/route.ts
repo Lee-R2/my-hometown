@@ -4,6 +4,7 @@ import { getSupabaseClient } from '@/storage/database/supabase-client';
 import { moderateContent } from '@/lib/content-moderation';
 import { uploadFile, generateSignedUrl } from '@/lib/storage-utils';
 import { ApiErrors } from '@/lib/api-error';
+import { isDangerousExtension } from '@/lib/security';
 
 const supabase = getSupabaseClient();
 
@@ -256,7 +257,16 @@ export async function POST(request: NextRequest) {
           );
         }
 
-        const isImage = file.type.startsWith('image/');
+        // 安全修复（P3 输入校验）：扩展名黑名单，禁止可执行脚本/可含 XSS 的文件
+        if (isDangerousExtension(file.name)) {
+          return NextResponse.json(
+            { success: false, error: `文件 ${file.name} 格式不支持，禁止上传可执行脚本或可含脚本的文件` },
+            { status: 400 }
+          );
+        }
+
+        // 安全修复（P3 输入校验）：显式排除 image/svg+xml，避免 startsWith('image/') 放行含脚本的 SVG
+        const isImage = file.type.startsWith('image/') && file.type !== 'image/svg+xml';
         const isVideo = file.type.startsWith('video/');
         if (!isImage && !isVideo) {
           return NextResponse.json(

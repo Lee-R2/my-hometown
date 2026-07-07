@@ -330,6 +330,11 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const { teamId, taskId, memberId, memberRole, formId, formData } = body;
 
+    // IDOR 防护：禁止为其他小队提交反馈
+    if (teamId !== auth.payload!.userId) {
+      return ApiErrors.forbidden('无权为其他小队提交反馈');
+    }
+
     if (!teamId || !taskId || !memberId || !formId) {
       return ApiErrors.validation('缺少必要参数');
     }
@@ -538,7 +543,12 @@ async function finalizeFinalTask(
     const themeTaskIdSet = new Set(themeTaskIds);
     const completedThemeTasks = [...completedTaskIds].filter(id => themeTaskIdSet.has(id)).length;
 
-    await client
+    // 安全修复 VULN-BIZ-016：周期清零原子化改进
+    // 顺序：先创建归档记录（theme_completions + team_theme_selections），再清零 teams
+    // 每一步检查错误，归档失败则不执行清零，清零失败则记录关键告警
+
+    // 步骤1：归档主题完成记录（upsert 幂等）
+    const { error: completionError } = await client
       .from('theme_completions')
       .upsert({
         team_id: teamId,
@@ -550,6 +560,14 @@ async function finalizeFinalTask(
         completed_at: new Date().toISOString(),
       }, { onConflict: 'team_id,theme_id,cycle' });
 
+    if (completionError) {
+      console.error('[finalizeFinalTask] 归档主题完成记录失败，终止清零以防数据不一致:', {
+        teamId, themeId, cycle, error: completionError.message,
+      });
+      return;
+    }
+
+    // 步骤2：更新主题选择记录为 completed
     const { error: selectionUpdateError } = await client
       .from('team_theme_selections')
       .update({
@@ -584,7 +602,9 @@ async function finalizeFinalTask(
         .eq('cycle', cycle);
     }
 
-    await client
+    // 步骤3：清零 teams 表（积分清零 + cycle+1）
+    // 乐观锁：.eq('cycle', cycle) 防止并发双重归档导致 cycle 被多次递增
+    const { data: clearedTeam, error: clearError } = await client
       .from('teams')
       .update({
         current_theme_id: null,
@@ -594,7 +614,23 @@ async function finalizeFinalTask(
         cycle: cycle + 1,
         updated_at: new Date().toISOString()
       })
-      .eq('id', teamId);
+      .eq('id', teamId)
+      .eq('cycle', cycle)
+      .select('id');
+
+    if (clearError) {
+      // 清零失败：归档已完成但 teams 未清零，记录关键告警供人工修复
+      console.error('[finalizeFinalTask] 关键：归档已完成但 teams 清零失败，存在数据不一致风险:', {
+        teamId, themeId, cycle, error: clearError.message,
+      });
+      return;
+    }
+
+    if (!clearedTeam || clearedTeam.length === 0) {
+      // 乐观锁冲突：cycle 已被并发请求递增，说明该周期已被归档过，无需重复操作
+      console.warn(`[finalizeFinalTask] 周期 ${cycle} 已被并发归档，跳过: team=${teamId}`);
+      return;
+    }
 
     console.log(`最后任务已完成并归档 team=${teamId}, task=${taskId}, cycle=${cycle}`);
   } catch (error) {

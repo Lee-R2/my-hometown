@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireTeam, authError, safeError } from '@/lib/api-auth';
 import { getSupabaseClient } from '@/storage/database/supabase-client';
-import { ApiErrors } from '@/lib/api-error';
+import { ApiErrors, supabaseErrorResponse } from '@/lib/api-error';
 
 /**
  * 获取小队详细信息
@@ -27,7 +27,9 @@ export async function GET(request: NextRequest) {
       .single();
 
     if (error) {
-      return NextResponse.json({ success: false, error: error.message }, { status: 404 });
+      // 安全修复：不直接返回 error.message，避免泄露数据库内部信息
+      // 生产环境返回通用消息，开发环境通过 supabaseErrorResponse 返回调试详情
+      return supabaseErrorResponse(error, '获取小队信息失败');
     }
 
     return NextResponse.json({ success: true, data });

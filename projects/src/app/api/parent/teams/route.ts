@@ -13,12 +13,10 @@ export async function GET(request: NextRequest) {
 
   try {
     const { searchParams } = new URL(request.url);
-    const parentId = searchParams.get('parentId');
+    // 安全修复 VULN-API-010: 强制使用认证令牌中的 userId，丢弃客户端传入的 parentId，
+    // 防止家长 A 伪造 parentId 查询家长 B 的关注列表
+    const parentId = auth.payload!.userId;
     const includeHistory = searchParams.get('includeHistory') === 'true';
-
-    if (!parentId) {
-      return ApiErrors.validation('缺少家长ID');
-    }
 
     // 先获取关注记录
     let query = supabase
@@ -416,6 +414,9 @@ export async function DELETE(request: NextRequest) {
 
 // 切换小队
 export async function PATCH(request: NextRequest) {
+  const auth = requireParent(request);
+  if (!auth.authenticated) return authError(auth);
+
   try {
     const body = await request.json();
     const { followId, newTeamId, childGrade } = body;

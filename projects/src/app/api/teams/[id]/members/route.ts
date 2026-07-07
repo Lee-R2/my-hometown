@@ -15,6 +15,39 @@ export async function GET(
     const { id } = await params;
     const client = getSupabaseClient();
 
+    // team 角色只能查看自己小队的成员
+    if (auth.payload!.role === 'team' && auth.payload!.userId !== id) {
+      return ApiErrors.forbidden('只能查看自己小队的成员');
+    }
+
+    // parent 角色只能查看已关注小队的成员
+    if (auth.payload!.role === 'parent') {
+      const { data: followRecord } = await client
+        .from('parent_team_follows')
+        .select('id')
+        .eq('team_id', id)
+        .eq('parent_id', auth.payload!.userId)
+        .maybeSingle();
+      if (!followRecord) {
+        return ApiErrors.forbidden('只能查看已关注小队的成员');
+      }
+    }
+
+    // volunteer/teacher 角色按学校范围校验
+    if (auth.payload!.role === 'volunteer' || auth.payload!.role === 'teacher') {
+      const { data: targetTeam } = await client
+        .from('teams')
+        .select('school_id')
+        .eq('id', id)
+        .maybeSingle();
+      if (!targetTeam) {
+        return ApiErrors.notFound('小队不存在');
+      }
+      if (targetTeam.school_id !== auth.payload!.schoolId) {
+        return ApiErrors.forbidden('无权查看其他学校的小队成员');
+      }
+    }
+
     const { data: members, error } = await client
       .from('team_members')
       .select('*')
@@ -39,15 +72,36 @@ export async function POST(
   const auth = requireAnyAuth(request);
   if (!auth.authenticated) return authError(auth);
 
-  // team 角色只能给自己的小队添加成员
-  if (auth.payload?.role === 'team' && auth.payload?.userId !== (await params).id) {
-    return ApiErrors.forbidden('只能给自己的小队添加成员');
+  // parent 角色无权添加成员
+  if (auth.payload!.role === 'parent') {
+    return ApiErrors.forbidden('家长无权添加小队成员');
   }
 
   try {
     const { id } = await params;
-    const body = await request.json();
     const client = getSupabaseClient();
+
+    // team 角色只能给自己的小队添加成员
+    if (auth.payload!.role === 'team' && auth.payload!.userId !== id) {
+      return ApiErrors.forbidden('只能给自己的小队添加成员');
+    }
+
+    // volunteer/teacher 角色按学校范围校验
+    if (auth.payload!.role === 'volunteer' || auth.payload!.role === 'teacher') {
+      const { data: targetTeam } = await client
+        .from('teams')
+        .select('school_id')
+        .eq('id', id)
+        .maybeSingle();
+      if (!targetTeam) {
+        return ApiErrors.notFound('小队不存在');
+      }
+      if (targetTeam.school_id !== auth.payload!.schoolId) {
+        return ApiErrors.forbidden('无权操作其他学校的小队');
+      }
+    }
+
+    const body = await request.json();
 
     const { data: member, error } = await client
       .from('team_members')

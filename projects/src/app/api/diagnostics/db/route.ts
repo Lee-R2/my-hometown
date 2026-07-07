@@ -29,7 +29,7 @@ export async function GET(request: NextRequest) {
     try {
       const { data: users, error: usersError } = await client
         .from('users')
-        .select('id, username, name, role, password, is_active')
+        .select('id, username, name, role, is_active')
         .limit(5);
 
       if (usersError) {

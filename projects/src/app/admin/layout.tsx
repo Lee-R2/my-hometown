@@ -57,37 +57,13 @@ export default function AdminLayout({
           }));
           setChecked(true);
         } else {
-          // API 认证失败，检查 localStorage 降级
-          const cached = localStorage.getItem('user');
-          if (cached) {
-            try {
-              const parsed = JSON.parse(cached);
-              // localStorage 缓存也可能过期，跳转登录
-              if (parsed?.id && parsed?.role) {
-                setUser(parsed);
-                setChecked(true);
-                return;
-              }
-            } catch {}
-          }
-          // 都失败，跳转登录
+          // API 认证失败，一律跳转登录页（不降级到 localStorage，避免鉴权绕过）
           localStorage.removeItem('user');
           window.location.href = '/admin/login';
         }
       })
       .catch(() => {
-        // 网络错误时降级到 localStorage
-        const cached = localStorage.getItem('user');
-        if (cached) {
-          try {
-            const parsed = JSON.parse(cached);
-            if (parsed?.id && parsed?.role) {
-              setUser(parsed);
-              setChecked(true);
-              return;
-            }
-          } catch {}
-        }
+        // 网络错误时也一律跳转登录页（不降级到 localStorage，避免鉴权绕过）
         localStorage.removeItem('user');
         window.location.href = '/admin/login';
       });

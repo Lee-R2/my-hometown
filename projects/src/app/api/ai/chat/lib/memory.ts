@@ -7,6 +7,56 @@
 
 import { getSupabaseClient } from '@/storage/database/supabase-client';
 
+/**
+ * 安全修复（P3 输入校验）：对从 AI 输出中正则提取的内容做基本 sanitization
+ * - 移除控制字符与 null bytes，防止污染下游存储/渲染
+ * - 限制长度，避免超长字符串攻击
+ */
+function sanitizeExtracted(text: string, maxLen = 1000): string {
+  if (!text) return '';
+  return text
+    .replace(/[\x00-\x1f\x7f]/g, '') // 移除控制字符与 null bytes
+    .slice(0, maxLen);
+}
+
+/**
+ * 格式化时间标签（如"3天前"、"刚刚"、"2小时前"）
+ * 让 LLM 能感知记忆的时间远近，避免把旧记忆当近期内容主动提及
+ */
+function formatTimeLabel(dateStr?: string | null): string {
+  if (!dateStr) return '';
+  const date = new Date(dateStr);
+  if (isNaN(date.getTime())) return '';
+  const diffMs = Date.now() - date.getTime();
+  if (diffMs < 0) return '刚刚';
+  const diffMin = Math.floor(diffMs / 60000);
+  const diffHour = Math.floor(diffMin / 60);
+  const diffDay = Math.floor(diffHour / 24);
+  if (diffMin < 1) return '刚刚';
+  if (diffMin < 60) return `${diffMin}分钟前`;
+  if (diffHour < 24) return `${diffHour}小时前`;
+  if (diffDay < 7) return `${diffDay}天前`;
+  if (diffDay < 30) return `${Math.floor(diffDay / 7)}周前`;
+  return `${Math.floor(diffDay / 30)}个月前`;
+}
+
+/**
+ * 批量更新记忆的最后访问时间（时间衰减系统的基础）
+ * access_count 递增由蒸馏器在后台定期处理，避免并发写入冲突
+ */
+async function touchMemories(ids: string[]): Promise<void> {
+  if (ids.length === 0) return;
+  try {
+    const client = getSupabaseClient();
+    await client
+      .from('agent_memories')
+      .update({ last_accessed_at: new Date().toISOString() })
+      .in('id', ids);
+  } catch (e) {
+    // 访问时间更新失败不影响主流程
+  }
+}
+
 export async function saveToMemory(
   agentUsername: string,
   sessionId: string,
@@ -62,10 +112,12 @@ export async function extractImportantInfo(
       /(?:我叫|我是|叫我)\s*(\S{2,4})/,
       /^(.{2,4})(?:同学|队员)?\s*[说问讲]/,
     ];
-    
+
     for (const pattern of namePatterns) {
       const match = content.match(pattern);
       if (match && userId) {
+        // 安全修复（P3 输入校验）：对正则提取内容做 sanitization
+        const extractedName = sanitizeExtracted(match[1], 20);
         // 检查是否已存在该用户的姓名记忆
         const { data: existing } = await client
           .from('agent_memories')
@@ -81,11 +133,14 @@ export async function extractImportantInfo(
           await client.from('agent_memories').insert({
             agent_username: agentUsername,
             memory_type: 'user_info',
-            content: `用户姓名: ${match[1]}`,
+            content: `用户姓名: ${extractedName}`,
             context_key: 'user_id',
             context_value: userId,
             importance: 7,
             is_active: true,
+            layer: 3,
+            user_id: userId,
+            status: 'active',
           });
         }
         break;
@@ -97,10 +152,12 @@ export async function extractImportantInfo(
       /(?:小队|团队)[^\w]*(\S{2,8})(?:小队|团队)?/,
       /(?:我们|咱们)(?:小队|团队)\s*叫?\s*(\S+)/,
     ];
-    
+
     for (const pattern of teamPatterns) {
       const match = content.match(pattern);
       if (match && userId) {
+        // 安全修复（P3 输入校验）：对正则提取内容做 sanitization
+        const extractedTeam = sanitizeExtracted(match[1], 50);
         const { data: existing } = await client
           .from('agent_memories')
           .select('id')
@@ -115,18 +172,21 @@ export async function extractImportantInfo(
           await client.from('agent_memories').insert({
             agent_username: agentUsername,
             memory_type: 'team_info',
-            content: `用户提到的小队/团队: ${match[1]}`,
+            content: `用户提到的小队/团队: ${extractedTeam}`,
             context_key: 'user_id',
             context_value: userId,
             importance: 5,
             is_active: true,
+            layer: 3,
+            user_id: userId,
+            status: 'active',
           });
         }
         break;
       }
     }
 
-    // 提取任务进度信息
+    // 提取任务进度信息（L1 短期记忆，24小时过期）
     if (content.includes('任务') && content.includes('完成') && userId) {
       await client.from('agent_memories').insert({
         agent_username: agentUsername,
@@ -136,6 +196,10 @@ export async function extractImportantInfo(
         context_value: userId,
         importance: 6,
         is_active: true,
+        layer: 1,
+        user_id: userId,
+        status: 'active',
+        expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
       });
     }
 
@@ -230,7 +294,10 @@ export async function extractImportantInfo(
             context_value: userId,
             importance,
             is_active: true,
-            layer: importance >= 9 ? 0 : importance >= 7 ? 1 : importance >= 4 ? 2 : 3,
+            layer: importance >= 9 ? 2 : 1,
+            user_id: userId,
+            status: 'active',
+            expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
           });
           break;
         }
@@ -262,6 +329,7 @@ export async function getRelevantMemories(
 
     // 查询与用户相关的记忆
     if (userId) {
+      const nowIso = new Date().toISOString();
       const { data: userMemories } = await client
         .from('agent_memories')
         .select('*')
@@ -269,19 +337,22 @@ export async function getRelevantMemories(
         .eq('context_key', 'user_id')
         .eq('context_value', userId)
         .eq('is_active', true)
+        .or(`expires_at.is.null,expires_at.gt.${nowIso}`)
         .order('importance', { ascending: false })
         .limit(10);
 
       if (userMemories && userMemories.length > 0) {
         memories.push('【用户相关信息】');
         userMemories.forEach((m) => {
-          memories.push(`- ${m.content}`);
+          memories.push(`- [${formatTimeLabel(m.created_at)}] ${m.content}`);
         });
+        await touchMemories(userMemories.map((m: any) => m.id));
       }
     }
 
     // 查询与小队相关的记忆
     if (teamId) {
+      const nowIso = new Date().toISOString();
       const { data: teamMemories } = await client
         .from('agent_memories')
         .select('*')
@@ -289,14 +360,16 @@ export async function getRelevantMemories(
         .eq('context_key', 'team_id')
         .eq('context_value', teamId)
         .eq('is_active', true)
+        .or(`expires_at.is.null,expires_at.gt.${nowIso}`)
         .order('importance', { ascending: false })
         .limit(10);
 
       if (teamMemories && teamMemories.length > 0) {
         memories.push('\n【小队相关信息】');
         teamMemories.forEach((m) => {
-          memories.push(`- ${m.content}`);
+          memories.push(`- [${formatTimeLabel(m.created_at)}] ${m.content}`);
         });
+        await touchMemories(teamMemories.map((m: any) => m.id));
       }
     }
 
@@ -539,57 +612,69 @@ export async function getRelevantMemories(
       }
     }
 
-    // 查询与用户相关的历史对话（无论 sessionId 是否一致）
+    // 查询与用户相关的历史对话（最近7天，最多10条，带时间标签）
     if (userId) {
+      const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
       const { data: userConversations } = await client
         .from('agent_conversations')
         .select('role, content, created_at, session_id')
         .eq('agent_username', agentUsername)
         .eq('user_id', userId)
+        .gte('created_at', sevenDaysAgo)
         .order('created_at', { ascending: false })
         .limit(10);
 
       if (userConversations && userConversations.length > 0) {
-        memories.push('\n【历史对话记录】');
+        memories.push('\n【历史对话记录（注意时间标签，旧对话不要主动提起）】');
         // 倒序显示（从旧到新），只显示最近5条
         const recent = userConversations.slice(0, 5).reverse();
         recent.forEach((c) => {
           const roleText = c.role === 'user' ? '用户' : '助手';
           const shortContent = c.content.length > 80 ? c.content.substring(0, 80) + '...' : c.content;
-          memories.push(`- ${roleText}: ${shortContent}`);
+          memories.push(`- [${formatTimeLabel(c.created_at)}] ${roleText}: ${shortContent}`);
         });
       }
     }
 
-    // 查询与小队相关的历史对话（无论 sessionId 是否一致）
+    // 查询与小队相关的历史对话（最近7天，最多10条，带时间标签）
     if (teamId) {
+      const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
       const { data: teamConversations } = await client
         .from('agent_conversations')
         .select('role, content, created_at, session_id')
         .eq('agent_username', agentUsername)
         .ilike('session_id', `%${teamId}%`)
+        .gte('created_at', sevenDaysAgo)
         .order('created_at', { ascending: false })
         .limit(10);
 
       if (teamConversations && teamConversations.length > 0) {
-        memories.push('\n【历史对话记录】');
+        memories.push('\n【历史对话记录（注意时间标签，旧对话不要主动提起）】');
         // 倒序显示（从旧到新），只显示最近5条
         const recent = teamConversations.slice(0, 5).reverse();
         recent.forEach((c) => {
           const roleText = c.role === 'user' ? '用户' : '助手';
           const shortContent = c.content.length > 80 ? c.content.substring(0, 80) + '...' : c.content;
-          memories.push(`- ${roleText}: ${shortContent}`);
+          memories.push(`- [${formatTimeLabel(c.created_at)}] ${roleText}: ${shortContent}`);
         });
       }
     }
 
     // 查询会话最近的对话摘要（如果有特定 sessionId 且与 teamId/userId 不同）
+    // VULN-AI-015 修复：sessionId 必须归属当前用户才能查询，附加 user_id 过滤防止越权读取他人对话
     if (sessionId && !sessionId.includes(teamId || '') && !sessionId.includes(userId || '')) {
-      const { data: recentConversations } = await client
+      let sessionQuery = client
         .from('agent_conversations')
         .select('role, content, created_at')
         .eq('agent_username', agentUsername)
-        .eq('session_id', sessionId)
+        .eq('session_id', sessionId);
+
+      // 附加 user_id 过滤，确保只能查到当前用户自己的对话历史
+      if (userId) {
+        sessionQuery = sessionQuery.eq('user_id', userId);
+      }
+
+      const { data: recentConversations } = await sessionQuery
         .order('created_at', { ascending: false })
         .limit(6);
 
@@ -599,46 +684,40 @@ export async function getRelevantMemories(
         recentConversations.reverse().forEach((c) => {
           const roleText = c.role === 'user' ? '用户' : '助手';
           const shortContent = c.content.length > 100 ? c.content.substring(0, 100) + '...' : c.content;
-          memories.push(`- ${roleText}: ${shortContent}`);
+          memories.push(`- [${formatTimeLabel(c.created_at)}] ${roleText}: ${shortContent}`);
         });
       }
     }
 
     // 加载分层记忆（L0-L4）
     try {
+      const nowIso = new Date().toISOString();
       const { data: layeredMemories } = await client
         .from('agent_memories')
-        .select('content, memory_type, layer, importance, access_count')
+        .select('id, content, memory_type, layer, importance, access_count, created_at')
         .eq('agent_username', agentUsername)
         .eq('is_active', true)
         .not('layer', 'is', null)
+        .or(`expires_at.is.null,expires_at.gt.${nowIso}`)
         .order('importance', { ascending: false })
         .limit(20);
 
       if (layeredMemories && layeredMemories.length > 0) {
-        // 按层级分组
-        const l0 = layeredMemories.filter(m => m.layer === 0); // 核心身份
-        const l2 = layeredMemories.filter(m => m.layer === 2); // 重要事实
-        const l4 = layeredMemories.filter(m => m.layer === 4); // 临时笔记
+        // 按层级分组（与设计一致：L3长期、L4永恒）
+        const l3 = layeredMemories.filter(m => m.layer === 3); // 长期记忆
+        const l4 = layeredMemories.filter(m => m.layer === 4); // 永恒记忆
 
-        if (l0.length > 0) {
-          memories.push('\n【核心记忆·永不忘】');
-          l0.forEach(m => memories.push(`- ${m.content}`));
+        if (l3.length > 0) {
+          memories.push('\n【长期记忆】');
+          l3.forEach(m => memories.push(`- [${formatTimeLabel(m.created_at)}] ${m.content}`));
         }
-        // L2 已通过常规记忆加载，跳过
         if (l4.length > 0) {
-          memories.push('\n【临时笔记·近期有效】');
-          l4.slice(0, 5).forEach(m => memories.push(`- ${m.content}`));
+          memories.push('\n【永恒记忆·核心】');
+          l4.forEach(m => memories.push(`- [${formatTimeLabel(m.created_at)}] ${m.content}`));
         }
 
-        // 更新访问计数
-        layeredMemories.forEach(async (m) => {
-          await client
-            .from('agent_memories')
-            .update({ access_count: (m.access_count || 0) + 1, last_accessed_at: new Date().toISOString() })
-            .eq('content', m.content)
-            .eq('agent_username', agentUsername);
-        });
+        // 更新访问时间（时间衰减系统）
+        await touchMemories(layeredMemories.map((m: any) => m.id));
       }
     } catch (e) {
       // 分层记忆加载失败不影响主流程

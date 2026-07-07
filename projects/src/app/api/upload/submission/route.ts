@@ -2,6 +2,7 @@ import { requireAnyAuth, authError, safeError } from '@/lib/api-auth';
 import { NextRequest, NextResponse } from 'next/server';
 import { uploadFile, generateSignedUrl } from '@/lib/storage-utils';
 import { ApiErrors } from '@/lib/api-error';
+import { isDangerousExtension } from '@/lib/security';
 
 // 支持的文件类型
 const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/bmp'];
@@ -44,6 +45,11 @@ export async function POST(request: NextRequest) {
 
     if (!file) {
       return ApiErrors.validation('未找到上传文件');
+    }
+
+    // 安全修复（P3 输入校验）：扩展名黑名单校验，禁止可执行脚本/可含 XSS 的文件
+    if (isDangerousExtension(file.name)) {
+      return ApiErrors.validation('不支持的文件类型，禁止上传可执行脚本或可含脚本的文件（exe/bat/cmd/sh/php/js/html/svg）');
     }
 
     // 验证文件类型

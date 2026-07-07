@@ -51,35 +51,13 @@ export default function TeamLayout({
           }));
           setChecked(true);
         } else {
-          // API 认证失败，检查 localStorage 降级
-          const cached = localStorage.getItem('team');
-          if (cached) {
-            try {
-              const parsed = JSON.parse(cached);
-              if (parsed?.id && parsed?.code) {
-                setTeam(parsed);
-                setChecked(true);
-                return;
-              }
-            } catch {}
-          }
+          // API 认证失败，一律跳转登录页（不降级到 localStorage，避免鉴权绕过）
           localStorage.removeItem('team');
           window.location.href = '/team/login';
         }
       })
       .catch(() => {
-        // 网络错误时降级到 localStorage
-        const cached = localStorage.getItem('team');
-        if (cached) {
-          try {
-            const parsed = JSON.parse(cached);
-            if (parsed?.id && parsed?.code) {
-              setTeam(parsed);
-              setChecked(true);
-              return;
-            }
-          } catch {}
-        }
+        // 网络错误时也一律跳转登录页（不降级到 localStorage，避免鉴权绕过）
         localStorage.removeItem('team');
         window.location.href = '/team/login';
       });

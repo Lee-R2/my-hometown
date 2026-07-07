@@ -9,7 +9,7 @@ import {
   MessageCircle, Award, Shield,
   Clock, CheckCircle, AlertCircle, Building, UserPlus, UserCheck,
   Wrench, BookOpen, School, Info, User, ClipboardList, MessageSquare,
-  Bell, X, Plus, Newspaper
+  Bell, X, Plus, Newspaper, ShoppingBag
 } from 'lucide-react';
 import { toast } from 'sonner';
 import AdminBlackboardSection from '@/components/admin-blackboard-section';
@@ -52,6 +52,7 @@ const iconMap: Record<string, React.ElementType> = {
   ClipboardList,
   MessageSquare,
   Newspaper,
+  ShoppingBag,
 };
 
 // 颜色映射
@@ -256,6 +257,11 @@ export default function AdminDashboard() {
   };
 
   const handleLogout = () => {
+    // 清空蜡象助手对话历史和会话ID，保证退出再进入是新对话
+    if (user?.id) {
+      sessionStorage.removeItem(`laxiang_messages_${user.id}`);
+      sessionStorage.removeItem(`laxiang_session_${user.id}`);
+    }
     localStorage.removeItem('user');
     window.location.href = '/';
   };

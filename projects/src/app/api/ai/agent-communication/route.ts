@@ -28,6 +28,24 @@ export async function POST(request: NextRequest) {
       return ApiErrors.validation('无效的智能体标识');
     }
 
+    // 安全：不信任客户端传入的 sender。
+    // admin/teacher/volunteer 调用此接口时，sender 必须是 laxiang_zhushou，
+    // 不允许伪造为 yinhe_boshi（避免冒充银蛇博士下发反馈/指令）。
+    // 例外：服务端内部调用（stream-handler 的 extractAndForwardFeedback）
+    // 携带 X-Internal-Service: chat-stream header，允许以 yinhe_boshi 身份发送反馈。
+    const internalService = request.headers.get('x-internal-service');
+    if (internalService === 'chat-stream') {
+      // 内部服务调用，允许 yinhe_boshi → laxiang_zhushou 的反馈通道
+      if (sender !== 'yinhe_boshi' || receiver !== 'laxiang_zhushou') {
+        return NextResponse.json({ error: '内部服务仅允许 yinhe_boshi 发送反馈' }, { status: 403 });
+      }
+    } else {
+      // 外部客户端调用，sender 必须是 laxiang_zhushou
+      if (sender !== 'laxiang_zhushou') {
+        return NextResponse.json({ error: '无效的发送者' }, { status: 403 });
+      }
+    }
+
     const client = getSupabaseClient();
 
     // 保存消息
@@ -65,6 +83,9 @@ export async function POST(request: NextRequest) {
 
 // 获取消息列表
 export async function GET(request: NextRequest) {
+  const auth = requireAdmin(request);
+  if (!auth.authenticated) return authError(auth);
+
   try {
     const { searchParams } = new URL(request.url);
     const agent = searchParams.get('agent');      // 当前智能体

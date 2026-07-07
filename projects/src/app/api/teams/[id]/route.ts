@@ -15,6 +15,39 @@ export async function GET(
     const { id } = await params;
     const client = getSupabaseClient();
 
+    // team 角色只能查看自己的小队
+    if (auth.payload!.role === 'team' && auth.payload!.userId !== id) {
+      return ApiErrors.forbidden('只能查看自己的小队信息');
+    }
+
+    // parent 角色只能查看已关注的小队
+    if (auth.payload!.role === 'parent') {
+      const { data: followRecord } = await client
+        .from('parent_team_follows')
+        .select('id')
+        .eq('team_id', id)
+        .eq('parent_id', auth.payload!.userId)
+        .maybeSingle();
+      if (!followRecord) {
+        return ApiErrors.forbidden('只能查看已关注的小队');
+      }
+    }
+
+    // volunteer/teacher 角色按学校范围校验
+    if (auth.payload!.role === 'volunteer' || auth.payload!.role === 'teacher') {
+      const { data: targetTeam } = await client
+        .from('teams')
+        .select('school_id')
+        .eq('id', id)
+        .maybeSingle();
+      if (!targetTeam) {
+        return ApiErrors.notFound('小队不存在');
+      }
+      if (targetTeam.school_id !== auth.payload!.schoolId) {
+        return ApiErrors.forbidden('无权查看其他学校的小队');
+      }
+    }
+
     // 获取小队信息
     const { data: team, error } = await client
       .from('teams')
@@ -25,7 +58,7 @@ export async function GET(
     if (error || !team) {
       return ApiErrors.notFound('小队不存在');
     }
-    
+
     // 获取主题信息
     let theme = null;
     if (team.current_theme_id) {
@@ -147,11 +180,11 @@ export async function GET(
       .select('id', { count: 'exact', head: true })
       .eq('to_team_id', id);
     
-    // 送出的点赞总数（from_team_id 是点赞的小队）
+    // 送出的点赞总数（team_id 字段存储点赞者）
     const { count: likesGiven } = await client
       .from('likes')
       .select('id', { count: 'exact', head: true })
-      .eq('from_team_id', id);
+      .eq('team_id', id);
     
     likesStats = {
       received: likesReceived || 0,
@@ -205,21 +238,42 @@ export async function PUT(
   const auth = requireAnyAuth(request);
   if (!auth.authenticated) return authError(auth);
 
-  // team 角色只能修改自己的小队
-  if (auth.payload?.role === 'team' && auth.payload?.userId !== (await params).id) {
-    return ApiErrors.forbidden('只能修改自己的小队信息');
+  // parent 角色无权修改小队信息
+  if (auth.payload!.role === 'parent') {
+    return ApiErrors.forbidden('家长无权修改小队信息');
   }
 
   try {
     const { id } = await params;
-    const body = await request.json();
     const client = getSupabaseClient();
+
+    // team 角色只能修改自己的小队
+    if (auth.payload!.role === 'team' && auth.payload!.userId !== id) {
+      return ApiErrors.forbidden('无权修改其他小队信息');
+    }
+
+    // volunteer/teacher 角色只能修改自己学校的小队
+    if (auth.payload!.role === 'volunteer' || auth.payload!.role === 'teacher') {
+      const { data: targetTeam } = await client
+        .from('teams')
+        .select('school_id')
+        .eq('id', id)
+        .maybeSingle();
+      if (!targetTeam) {
+        return ApiErrors.notFound('小队不存在');
+      }
+      if (targetTeam.school_id !== auth.payload!.schoolId) {
+        return ApiErrors.forbidden('无权修改其他学校的小队');
+      }
+    }
+
+    const body = await request.json();
 
     const updateData: Record<string, any> = {
       updated_at: new Date().toISOString(),
     };
-    // team 角色只能修改基本字段，admin/volunteer 可以修改所有字段
-    const allowedFields = auth.payload?.role === 'team'
+    // team 角色只能修改基本字段，admin/volunteer/teacher 可以修改所有字段
+    const allowedFields = auth.payload!.role === 'team'
       ? ['name', 'slogan', 'rules', 'description', 'icon']
       : ['name', 'password', 'teacher_id', 'assigned_volunteer_id', 'grade', 'school_id', 'icon', 'description', 'status', 'slogan', 'rules', 'is_active', 'current_theme_id', 'current_task_id', 'points', 'cycle'];
     for (const field of allowedFields) {

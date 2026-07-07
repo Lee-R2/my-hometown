@@ -20,7 +20,8 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const { userId, oldPassword, newPassword } = await request.json();
+    const { oldPassword, newPassword } = await request.json();
+    const userId = auth.payload!.userId;
 
     if (!userId || !oldPassword || !newPassword) {
       return ApiErrors.validation('缺少必要参数');

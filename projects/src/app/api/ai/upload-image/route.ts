@@ -2,6 +2,7 @@ import { requireAnyAuth, authError, safeError } from '@/lib/api-auth';
 import { NextRequest, NextResponse } from 'next/server';
 import { uploadFile, generateSignedUrl } from '@/lib/storage-utils';
 import { ApiErrors } from '@/lib/api-error';
+import { isDangerousExtension } from '@/lib/security';
 
 /**
  * 图片上传API
@@ -20,8 +21,14 @@ export async function POST(request: NextRequest) {
       return ApiErrors.validation('缺少文件');
     }
 
+    // 安全修复（P3 输入校验）：扩展名黑名单校验，禁止可执行脚本/可含 XSS 的文件
+    if (isDangerousExtension(file.name)) {
+      return ApiErrors.validation('不支持的文件类型，禁止上传可执行脚本或可含脚本的文件（exe/bat/cmd/sh/php/js/html/svg）');
+    }
+
     // 验证文件类型
-    if (!file.type.startsWith('image/')) {
+    // 安全修复（P3 输入校验）：显式排除 image/svg+xml，避免 startsWith('image/') 放行含脚本的 SVG
+    if (!file.type.startsWith('image/') || file.type === 'image/svg+xml') {
       return ApiErrors.validation('只能上传图片文件');
     }
 

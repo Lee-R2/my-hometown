@@ -18,6 +18,11 @@ export async function POST(request: NextRequest) {
       return ApiErrors.validation('缺少必要参数');
     }
 
+    // IDOR 防护：禁止为其他小队选择主题
+    if (teamId !== auth.payload!.userId) {
+      return ApiErrors.forbidden('无权为其他小队选择主题');
+    }
+
     const client = getSupabaseClient();
 
     // 1. 检查小队是否存在

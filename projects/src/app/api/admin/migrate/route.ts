@@ -51,9 +51,11 @@ export async function POST(request: NextRequest) {
     });
   } catch (error: any) {
     console.error('迁移执行失败:', error);
+    // 安全修复：生产环境不返回 error.message，避免泄露数据库结构/文件路径
+    const isDev = process.env.NODE_ENV === 'development';
     return NextResponse.json({
       success: false,
-      error: `迁移执行失败: ${error.message}`,
+      error: isDev ? `迁移执行失败: ${error.message}` : '迁移执行失败，请查看服务器日志',
     }, { status: 500 });
   }
 }

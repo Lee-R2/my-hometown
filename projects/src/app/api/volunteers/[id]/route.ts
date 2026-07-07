@@ -129,6 +129,22 @@ export async function PUT(
     const body = await request.json();
     const client = getSupabaseClient();
 
+    // teacher 角色只能操作自己学校的志愿者
+    if (auth.payload!.role === 'teacher') {
+      const { data: targetVolunteer, error: targetError } = await client
+        .from('users')
+        .select('school_id')
+        .eq('id', id)
+        .eq('role', 'volunteer')
+        .maybeSingle();
+      if (targetError || !targetVolunteer) {
+        return ApiErrors.notFound('志愿者不存在');
+      }
+      if (targetVolunteer.school_id !== auth.payload!.schoolId) {
+        return ApiErrors.forbidden('无权操作其他学校的志愿者');
+      }
+    }
+
     const updateData: Record<string, any> = {};
     if (body.name) updateData.name = body.name;
     if (body.schoolId !== undefined) {
@@ -172,6 +188,22 @@ export async function DELETE(
   try {
     const { id } = await params;
     const client = getSupabaseClient();
+
+    // teacher 角色只能删除自己学校的志愿者
+    if (auth.payload!.role === 'teacher') {
+      const { data: targetVolunteer, error: targetError } = await client
+        .from('users')
+        .select('school_id')
+        .eq('id', id)
+        .eq('role', 'volunteer')
+        .maybeSingle();
+      if (targetError || !targetVolunteer) {
+        return ApiErrors.notFound('志愿者不存在');
+      }
+      if (targetVolunteer.school_id !== auth.payload!.schoolId) {
+        return ApiErrors.forbidden('无权操作其他学校的志愿者');
+      }
+    }
 
     const { error } = await client
       .from('users')

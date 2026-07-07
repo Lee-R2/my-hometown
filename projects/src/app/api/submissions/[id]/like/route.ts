@@ -11,6 +11,7 @@ import { supabaseErrorResponse, ApiErrors } from '@/lib/api-error';
 
 /**
  * 更新点赞者的爱心宝石碎片（存入 teams 表）
+ * 安全修复 VULN-BIZ-013：加乐观锁防止并发点赞导致数据不一致
  * @param client Supabase 客户端
  * @param teamId 小队ID
  * @param deltaLikes 点赞变化量（+1 或 -1）
@@ -20,104 +21,131 @@ async function updateHeartGems(
   client: ReturnType<typeof getSupabaseClient>,
   teamId: string,
   deltaLikes: number
-): Promise<{ 
-  newGems: number; 
-  totalFragments: number; 
+): Promise<{
+  newGems: number;
+  totalFragments: number;
   totalGems: number;
   totalSentLikes: number;
   shardsEarned: number;
 }> {
-  // 获取 teams 表中的碎片和宝石数据
-  const { data: teamData } = await client
-    .from('teams')
-    .select('heart_shards, heart_gems')
-    .eq('id', teamId)
-    .maybeSingle();
+  const MAX_RETRIES = 3;
+  let lastError: any = null;
 
-  let currentFragments = teamData?.heart_shards || 0;
-  let currentGems = teamData?.heart_gems || 0;
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    // 获取 teams 表中的碎片和宝石数据
+    const { data: teamData } = await client
+      .from('teams')
+      .select('heart_shards, heart_gems')
+      .eq('id', teamId)
+      .maybeSingle();
 
-  // 获取 heart_gems 表中的点赞统计
-  const { data: heartGemData } = await client
-    .from('heart_gems')
-    .select('total_sent_likes')
-    .eq('team_id', teamId)
-    .maybeSingle();
+    let currentFragments = teamData?.heart_shards || 0;
+    let currentGems = teamData?.heart_gems || 0;
 
-  let totalSentLikes = heartGemData?.total_sent_likes || 0;
+    // 获取 heart_gems 表中的点赞统计
+    const { data: heartGemData } = await client
+      .from('heart_gems')
+      .select('total_sent_likes')
+      .eq('team_id', teamId)
+      .maybeSingle();
 
-  // 计算获得的碎片：每3个点赞兑换0.1个碎片（不足3次不兑换）
-  const prevSentLikes = totalSentLikes;
-  totalSentLikes = Math.max(0, totalSentLikes + deltaLikes);
-  
-  // 根据点赞总数计算已兑换碎片（只有3的倍数部分才兑换）
-  const prevEarnedShards = Math.floor(prevSentLikes / 3) * 0.1;
-  const newEarnedShards = Math.floor(totalSentLikes / 3) * 0.1;
-  const shardsEarned = newEarnedShards - prevEarnedShards;
-  const newFragments = currentFragments + shardsEarned;
+    let totalSentLikes = heartGemData?.total_sent_likes || 0;
 
-  let newGems = currentGems;
+    // 计算获得的碎片：每3个点赞兑换0.1个碎片（不足3次不兑换）
+    const prevSentLikes = totalSentLikes;
+    totalSentLikes = Math.max(0, totalSentLikes + deltaLikes);
 
-  // 处理碎片的增减和合成
-  if (deltaLikes > 0) {
-    // 增加碎片，检查是否可以合成宝石
-    if (newFragments >= FRAGMENTS_PER_GEM) {
-      const gemsToCreate = Math.floor(newFragments / FRAGMENTS_PER_GEM);
-      newGems = currentGems + gemsToCreate;
-      currentFragments = newFragments % FRAGMENTS_PER_GEM;
-    } else {
-      currentFragments = newFragments;
-    }
-  } else if (deltaLikes < 0) {
-    // 减少碎片
-    const decreaseShards = Math.abs(shardsEarned);
-    let remainingDecrease = decreaseShards;
-    
-    // 先从现有碎片中扣除
-    if (currentFragments >= remainingDecrease) {
-      currentFragments -= remainingDecrease;
-      remainingDecrease = 0;
-    } else {
-      remainingDecrease -= currentFragments;
-      currentFragments = 0;
-      
-      // 碎片不够，从宝石中拆分
-      if (newGems > 0) {
-        newGems -= 1;
-        currentFragments = FRAGMENTS_PER_GEM - remainingDecrease;
+    // 根据点赞总数计算已兑换碎片（只有3的倍数部分才兑换）
+    const prevEarnedShards = Math.floor(prevSentLikes / 3) * 0.1;
+    const newEarnedShards = Math.floor(totalSentLikes / 3) * 0.1;
+    const shardsEarned = newEarnedShards - prevEarnedShards;
+    const newFragments = currentFragments + shardsEarned;
+
+    let newGems = currentGems;
+
+    // 处理碎片的增减和合成
+    if (deltaLikes > 0) {
+      // 增加碎片，检查是否可以合成宝石
+      if (newFragments >= FRAGMENTS_PER_GEM) {
+        const gemsToCreate = Math.floor(newFragments / FRAGMENTS_PER_GEM);
+        newGems = currentGems + gemsToCreate;
+        currentFragments = newFragments % FRAGMENTS_PER_GEM;
+      } else {
+        currentFragments = newFragments;
+      }
+    } else if (deltaLikes < 0) {
+      // 减少碎片
+      const decreaseShards = Math.abs(shardsEarned);
+      let remainingDecrease = decreaseShards;
+
+      // 先从现有碎片中扣除
+      if (currentFragments >= remainingDecrease) {
+        currentFragments -= remainingDecrease;
+        remainingDecrease = 0;
+      } else {
+        remainingDecrease -= currentFragments;
+        currentFragments = 0;
+
+        // 碎片不够，从宝石中拆分
+        if (newGems > 0) {
+          newGems -= 1;
+          currentFragments = FRAGMENTS_PER_GEM - remainingDecrease;
+        }
       }
     }
+
+    // 四舍五入保留2位小数
+    currentFragments = Math.round(currentFragments * 100) / 100;
+
+    // 更新 teams 表（乐观锁：校验 heart_gems 未被并发修改，heart_shards 为浮点数不作为锁条件）
+    const { data: updated, error: updateError } = await client
+      .from('teams')
+      .update({
+        heart_shards: currentFragments,
+        heart_gems: newGems,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', teamId)
+      .eq('heart_gems', currentGems)
+      .select('id');
+
+    if (updateError) {
+      lastError = updateError;
+      // 数据库错误，重试可能无法解决，但仍尝试
+      continue;
+    }
+
+    if (!updated || updated.length === 0) {
+      // 乐观锁冲突：heart_gems 已被并发修改，重试
+      lastError = new Error('乐观锁冲突，heart_gems 已被并发修改');
+      continue;
+    }
+
+    // 更新 heart_gems 表的点赞统计
+    await client
+      .from('heart_gems')
+      .upsert({
+        team_id: teamId,
+        total_sent_likes: totalSentLikes,
+        updated_at: new Date().toISOString()
+      }, { onConflict: 'team_id' });
+
+    return {
+      newGems: newGems - currentGems,
+      totalFragments: currentFragments,
+      totalGems: newGems,
+      totalSentLikes,
+      shardsEarned: Math.round(shardsEarned * 100) / 100,
+    };
   }
 
-  // 四舍五入保留2位小数
-  currentFragments = Math.round(currentFragments * 100) / 100;
-
-  // 更新 teams 表
-  await client
-    .from('teams')
-    .update({ 
-      heart_shards: currentFragments,
-      heart_gems: newGems,
-      updated_at: new Date().toISOString()
-    })
-    .eq('id', teamId);
-
-  // 更新 heart_gems 表的点赞统计
-  await client
-    .from('heart_gems')
-    .upsert({
-      team_id: teamId,
-      total_sent_likes: totalSentLikes,
-      updated_at: new Date().toISOString()
-    }, { onConflict: 'team_id' });
-
-  return {
-    newGems: newGems - currentGems,
-    totalFragments: currentFragments,
-    totalGems: newGems,
-    totalSentLikes,
-    shardsEarned: Math.round(shardsEarned * 100) / 100,
-  };
+  // 重试耗尽，记录告警并抛出错误，由调用方处理
+  console.error('[updateHeartGems] 乐观锁重试耗尽，放弃更新', {
+    teamId,
+    deltaLikes,
+    lastError: lastError?.message || lastError,
+  });
+  throw new Error('爱心碎片更新冲突，请重试');
 }
 
 /**
@@ -189,12 +217,12 @@ export async function POST(
       return ApiErrors.validation('提交记录不属于该小队');
     }
 
-    // 检查是否已点赞
+    // 检查是否已点赞（team_id 字段存储点赞者，原代码误用 from_team_id 字段不存在）
     const { data: existingLike } = await client
       .from('likes')
       .select('id')
       .eq('submission_id', submissionId)
-      .eq('from_team_id', fromTeamId)
+      .eq('team_id', fromTeamId)
       .maybeSingle();
 
     if (existingLike) {
@@ -267,23 +295,23 @@ export async function POST(
         }
       });
     } else {
-      // 未点赞，检查同阶段点赞限制
+      // 未点赞，检查同阶段点赞限制（team_id 字段存储点赞者）
       const { count: stageLikeCount } = await client
         .from('likes')
         .select('id', { count: 'exact', head: true })
-        .eq('from_team_id', fromTeamId)
+        .eq('team_id', fromTeamId)
         .eq('stage', stage);
 
       if (stageLikeCount && stageLikeCount >= MAX_LIKES_PER_STAGE) {
         return ApiErrors.validation(`本阶段点赞次数已达上限（${MAX_LIKES_PER_STAGE}次）`);
       }
 
-      // 执行点赞
+      // 执行点赞（team_id 字段存储点赞者，to_team_id 和 stage 由迁移 017 添加）
       const { error: insertError } = await client
         .from('likes')
         .insert({
           submission_id: submissionId,
-          from_team_id: fromTeamId,
+          team_id: fromTeamId,
           to_team_id: toTeamId,
           stage: stage,
         });
@@ -382,14 +410,14 @@ export async function GET(
       return supabaseErrorResponse(countError, '获取点赞数失败');
     }
 
-    // 检查当前小队是否已点赞
+    // 检查当前小队是否已点赞（team_id 字段存储点赞者）
     let liked = false;
     if (fromTeamId) {
       const { data: existingLike } = await client
         .from('likes')
         .select('id')
         .eq('submission_id', submissionId)
-        .eq('from_team_id', fromTeamId)
+        .eq('team_id', fromTeamId)
         .maybeSingle();
       liked = !!existingLike;
     }

@@ -73,10 +73,10 @@ export async function POST(request: NextRequest) {
       return ApiErrors.validation('积分数量必须大于0');
     }
 
-    // 获取转出小队的信息（包含爱心碎片和宝石）
+    // 获取转出小队的信息（包含爱心碎片和宝石，以及指导者信息用于范围校验）
     const { data: fromTeam, error: fromError } = await supabase
       .from('teams')
-      .select('id, name, points, heart_shards, heart_gems')
+      .select('id, name, points, heart_shards, heart_gems, assigned_volunteer_id, teacher_id')
       .eq('id', from_team_id)
       .single();
 
@@ -89,15 +89,24 @@ export async function POST(request: NextRequest) {
       return ApiErrors.validation(`积分不足，当前可用积分 ${fromTeam.points}`);
     }
 
-    // 获取转入小队的信息
+    // 获取转入小队的信息（包含指导者信息用于范围校验）
     const { data: toTeam, error: toError } = await supabase
       .from('teams')
-      .select('id, name, points')
+      .select('id, name, points, assigned_volunteer_id, teacher_id')
       .eq('id', to_team_id)
       .single();
 
     if (toError || !toTeam) {
       return ApiErrors.notFound('转入小队不存在');
+    }
+
+    // 安全修复 VULN-BIZ-011：校验转账范围，只允许同一志愿者或同一老师指导的 sibling 小队之间转账
+    const sameVolunteer = fromTeam.assigned_volunteer_id && toTeam.assigned_volunteer_id
+      && fromTeam.assigned_volunteer_id === toTeam.assigned_volunteer_id;
+    const sameTeacher = fromTeam.teacher_id && toTeam.teacher_id
+      && fromTeam.teacher_id === toTeam.teacher_id;
+    if (!sameVolunteer && !sameTeacher) {
+      return ApiErrors.forbidden('只能向同一志愿者或老师指导的小队转账');
     }
 
     // 计算获得的爱心碎片（每赠送10积分兑换0.1个碎片，不足10积分不兑换）

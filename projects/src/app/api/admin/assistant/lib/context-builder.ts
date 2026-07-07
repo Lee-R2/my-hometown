@@ -6,6 +6,8 @@
  * 供 AI 助手在对话中引用。
  */
 
+import { maskPhone } from '@/lib/security';
+
 export async function getAdminDataContext(client: any, userId: string, userRole: string) {
   const data: Record<string, any> = {};
 
@@ -694,7 +696,8 @@ export async function getParentContext(client: any, parentId: string) {
       .select('id, name, phone, school_name')
       .eq('id', parentId)
       .single();
-    data.parent = parent;
+    // 手机号脱敏后再放入 AI 上下文，避免明文手机号外泄给模型
+    data.parent = parent ? { ...parent, phone: maskPhone(parent.phone) } : parent;
 
     // 获取家长关注的小队（只获取已审核通过的）
     const { data: follows } = await client

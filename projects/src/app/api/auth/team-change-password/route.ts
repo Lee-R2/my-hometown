@@ -43,8 +43,8 @@ export async function POST(request: NextRequest) {
     // 更新密码
     const { error: updateError } = await client
       .from('teams')
-      .update({ 
-        password: newPassword,
+      .update({
+        password: hashPassword(newPassword),
         updated_at: new Date().toISOString()
       })
       .eq('id', teamId);
