@@ -82,6 +82,7 @@ Desktop.ini
 *.temp
 .tmp/
 .temp/
+temp_*.ps1
 
 # Optional files
 *.tgz

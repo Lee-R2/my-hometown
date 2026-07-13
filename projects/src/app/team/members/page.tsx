@@ -325,7 +325,7 @@ export default function TeamInfoPage() {
         </div>
       </nav>
 
-      <main className="max-w-2xl mx-auto py-4 md:py-6 space-y-6">
+      <main className="max-w-2xl mx-auto px-4 md:px-6 py-4 md:py-6 space-y-6">
         {/* 首次填写提示 */}
         {isFirstTime && (
           <Card className="border-2 border-blue-200 bg-blue-50">

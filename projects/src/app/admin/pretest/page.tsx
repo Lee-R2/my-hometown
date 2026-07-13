@@ -314,7 +314,7 @@ export default function AdminPretestPage() {
       </nav>
 
       {/* 主内容 */}
-      <main className="max-w-7xl mx-auto px-4 md:px-4 py-4 md:py-6">
+      <main className="max-w-7xl mx-auto px-4 md:px-6 py-4 md:py-6">
         {/* 统计卡片 */}
         <div className="grid grid-cols-2 md:grid-cols-5 gap-3 md:gap-4 mb-6">
           <Card>

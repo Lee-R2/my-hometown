@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4f46e5"/>
+      <stop offset="100%" stop-color="#7c3aed"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="96" fill="url(#bg)"/>
+  <!-- 房屋图标 — 呼应"our home"主题 -->
+  <path d="M256 120 L376 220 L376 376 L336 376 L336 280 L176 280 L176 376 L136 376 L136 220 Z" fill="white" opacity="0.95"/>
+  <!-- 心形 — 呼应"爱心碎片" -->
+  <path d="M256 340 C240 320 210 315 210 340 C210 360 256 390 256 390 C256 390 302 360 302 340 C302 315 272 320 256 340Z" fill="#fbbf24"/>
+</svg>

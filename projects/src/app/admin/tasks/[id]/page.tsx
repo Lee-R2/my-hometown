@@ -1564,7 +1564,7 @@ export default function ThemeDetailPage() {
         </div>
       </nav>
 
-      <main className="max-w-6xl mx-auto px-3 md:px-4 py-4 md:py-6 space-y-4 md:space-y-6">
+      <main className="max-w-6xl mx-auto px-4 md:px-6 py-4 md:py-6 space-y-4 md:space-y-6">
         {/* 权限提示 */}
         {!permissions.canEdit && admin?.role === 'teacher' ? (
           <Card className="border-0 shadow-sm bg-orange-50 border-orange-200">

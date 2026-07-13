@@ -1951,7 +1951,7 @@ export async function POST(request: NextRequest) {
         // 从意图结果中提取命令链（如果 classifyIntent 提供了 commands）
         const commands = (intentResult as any).commands as Array<{ type: string; params: Record<string, any> }> | undefined;
         if (commands && commands.length > 0) {
-          commandChainResults = await executeCommandChain(client, commands, { userId, userRole });
+          commandChainResults = await executeCommandChain(client, commands, { userId, userRole }, internalAuthHeaders);
           console.log('[蜡象助手API] 命令链执行完成:', commandChainResults.map(r => `${r.type}:${r.success}`).join(', '));
         }
       } catch (chainErr) {
@@ -2359,7 +2359,7 @@ export async function POST(request: NextRequest) {
                   if (commandMatch) {
                     const command = parseMessageCommand(fullResponse);
                     if (command) {
-                      const result = await executeSendMessage(client, userId, userRole, command);
+                      const result = await executeSendMessage(client, userId, userRole, command, undefined, internalAuthHeaders);
                       messageResults.push(result);
                       
                       if (result.success) {
@@ -2999,7 +2999,7 @@ export async function POST(request: NextRequest) {
           if (fullResponse.includes('[发送消息]')) {
             const command = parseMessageCommand(fullResponse);
             if (command) {
-              const result = await executeSendMessage(client, userId, userRole, command);
+              const result = await executeSendMessage(client, userId, userRole, command, undefined, internalAuthHeaders);
               if (result.success) {
                 fullResponse = fullResponse.replace(/\[发送消息\].*?\|.*?\|.*?\n?/, 
                   `✅ ${result.message}\n`);

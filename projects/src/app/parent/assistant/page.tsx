@@ -179,7 +179,7 @@ export default function ParentAssistantPage() {
     <div className="min-h-screen bg-gradient-to-b from-violet-50 to-white pb-24">
       {/* 顶部导航 */}
       <div className="bg-white shadow-sm sticky top-0 z-10">
-        <div className="max-w-4xl mx-auto px-4 py-3 flex items-center gap-3">
+        <div className="max-w-4xl mx-auto px-4 md:px-6 py-3 flex items-center gap-3">
           <Button variant="ghost" size="sm" onClick={() => router.push('/parent/dashboard')}>
             <ArrowLeft className="w-5 h-5" />
           </Button>
@@ -200,7 +200,7 @@ export default function ParentAssistantPage() {
       </div>
 
       {/* 消息列表 */}
-      <div className="max-w-4xl mx-auto px-4 py-6">
+      <div className="max-w-4xl mx-auto px-4 md:px-6 py-6">
         <div className="space-y-4">
           {messages.map((msg, index) => (
             <div key={index}>
@@ -276,7 +276,7 @@ export default function ParentAssistantPage() {
 
       {/* 输入框 */}
       <div className="fixed bottom-0 left-0 right-0 bg-white border-t">
-        <div className="max-w-4xl mx-auto px-4 py-3">
+        <div className="max-w-4xl mx-auto px-4 md:px-6 py-3">
           <div className="flex gap-2">
             <Input
               ref={inputRef}

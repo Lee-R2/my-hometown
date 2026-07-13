@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseClient } from '@/storage/database/supabase-client';
 import { requireTeam, authError, safeError } from '@/lib/api-auth';
 import { ApiErrors } from '@/lib/api-error';
+import { verifyPassword, hashPassword, needsRehash } from '@/lib/security';
 
 export async function POST(request: NextRequest) {
   const auth = requireTeam(request);
@@ -33,14 +34,14 @@ export async function POST(request: NextRequest) {
     }
 
     // 验证旧密码是否正确
-    if (team.password !== oldPassword) {
+    if (!verifyPassword(oldPassword, team.password)) {
       return NextResponse.json(
         { error: '原密码错误' },
         { status: 401 }
       );
     }
 
-    // 更新密码
+    // 更新密码（使用 bcrypt 哈希）
     const { error: updateError } = await client
       .from('teams')
       .update({

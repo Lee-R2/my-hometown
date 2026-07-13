@@ -1,18 +1,24 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import dynamic from 'next/dynamic';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { 
-  Users, FileText, Settings, 
+import {
+  Users, FileText, Settings,
   MessageCircle, Award, Shield,
   Clock, CheckCircle, AlertCircle, Building, UserPlus, UserCheck,
   Wrench, BookOpen, School, Info, User, ClipboardList, MessageSquare,
   Bell, X, Plus, Newspaper, ShoppingBag
 } from 'lucide-react';
 import { toast } from 'sonner';
-import AdminBlackboardSection from '@/components/admin-blackboard-section';
+
+// 代码分割：黑板报组件（47KB）懒加载，减小 dashboard 初始 bundle
+const AdminBlackboardSection = dynamic(() => import('@/components/admin-blackboard-section'), {
+  ssr: false,
+  loading: () => null,
+});
 import { useScrollPosition } from '@/hooks/use-scroll-position';
 import { useResponsive } from '@/hooks/use-responsive';
 import { 

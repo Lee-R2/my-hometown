@@ -37,6 +37,14 @@ export async function generateMetadata({
         title,
         description,
         type: 'article',
+        images: [
+          {
+            url: '/og-image.svg',
+            width: 1200,
+            height: 630,
+            alt: `${teamName}的${themeName}任务报告`,
+          },
+        ],
       },
     };
   } catch {

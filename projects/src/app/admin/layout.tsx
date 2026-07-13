@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { usePathname } from 'next/navigation';
 import dynamic from 'next/dynamic';
 import { DataSyncProvider } from '@/contexts/data-sync-context';
+import { DashboardSkeleton } from '@/components/dashboard-skeleton';
 
 const AdminAssistant = dynamic(() => import('@/components/admin-assistant'), {
   ssr: false,
@@ -76,11 +77,7 @@ export default function AdminLayout({
 
   // 其他页面等待检查完成
   if (!checked) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-purple-500"></div>
-      </div>
-    );
+    return <DashboardSkeleton />;
   }
 
   return (

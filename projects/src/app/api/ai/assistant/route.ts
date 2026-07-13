@@ -1,4 +1,4 @@
-import { requireAnyAuth, authError, safeError } from '@/lib/api-auth';
+import { requireAnyAuth, authError, safeError, buildInternalAuthHeaders } from '@/lib/api-auth';
 import { ApiErrors } from '@/lib/api-error';
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseClient } from '@/storage/database/supabase-client';
@@ -170,6 +170,7 @@ export async function POST(request: NextRequest) {
       offTopicRatio: stats.offTopicRatio,
       offTopicCount: stats.offTopicCount,
       totalAnalyzed: stats.totalAnalyzed,
+      authHeaders: buildInternalAuthHeaders(request),
     });
 
   } catch (error) {

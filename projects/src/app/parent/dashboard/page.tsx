@@ -559,7 +559,7 @@ export default function ParentDashboard() {
       <div className="min-h-screen bg-gray-50 pb-20">
         {/* 顶部导航 */}
         <div className="bg-gradient-to-r from-purple-500 to-pink-500 text-white shadow-lg sticky top-0 z-10">
-          <div className="max-w-4xl mx-auto px-4 py-4">
+          <div className="max-w-4xl mx-auto px-4 md:px-6 py-4">
             <div className="flex items-center gap-3">
               <button onClick={() => {
                 setSelectedTeam(null);
@@ -580,7 +580,7 @@ export default function ParentDashboard() {
           </div>
         </div>
 
-        <div className="max-w-4xl mx-auto px-4 py-6 space-y-6">
+        <div className="max-w-4xl mx-auto px-4 md:px-6 py-6 space-y-6">
 
           {/* 小队基本信息 */}
           <Card>
@@ -1750,7 +1750,7 @@ export default function ParentDashboard() {
     <div className="min-h-screen bg-gray-50">
       {/* 顶部导航 */}
       <div className="bg-white shadow-sm sticky top-0 z-10">
-        <div className="max-w-4xl mx-auto px-4 py-3 flex items-center justify-between">
+        <div className="max-w-4xl mx-auto px-4 md:px-6 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-full bg-gradient-to-br from-pink-400 to-orange-400 flex items-center justify-center">
               <span className="text-lg">👨‍👩‍👧</span>
@@ -1768,7 +1768,7 @@ export default function ParentDashboard() {
         </div>
       </div>
 
-      <div className="max-w-4xl mx-auto px-4 py-6 space-y-6">
+      <div className="max-w-4xl mx-auto px-4 md:px-6 py-6 space-y-6">
         {/* 关注记录 - 统一展示待审核、已拒绝、已取消的记录 */}
         {(() => {
           // 非活跃的关注记录（待审核、已拒绝、已取消）

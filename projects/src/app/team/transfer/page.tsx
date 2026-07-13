@@ -303,7 +303,7 @@ export default function TransferPage() {
         </div>
       </header>
 
-      <main className="max-w-4xl mx-auto px-3 py-4 space-y-4">
+      <main className="max-w-4xl mx-auto px-4 md:px-6 py-4 space-y-4">
         {/* 当前积分 */}
         <Card className="border-orange-200 bg-gradient-to-r from-orange-50 to-amber-50">
           <CardContent className="p-4">

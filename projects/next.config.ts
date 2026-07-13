@@ -33,12 +33,22 @@ const nextConfig: NextConfig = {
               "font-src 'self'",
               "connect-src 'self' https://emfluysvhghloklrmcxi.supabase.co https://api.coze.cn https://ark.cn-beijing.volces.com wss://ws-api.coze.cn",
               "media-src 'self' blob: data:",
+              "manifest-src 'self'",
+              "worker-src 'self'",
               "object-src 'none'",
               "base-uri 'self'",
               "form-action 'self'",
               "frame-ancestors 'none'",
             ].join('; '),
           },
+        ],
+      },
+      // Service Worker — 禁止缓存，确保每次获取最新版本
+      {
+        source: '/sw.js',
+        headers: [
+          { key: 'Cache-Control', value: 'no-cache, no-store, must-revalidate' },
+          { key: 'Service-Worker-Allowed', value: '/' },
         ],
       },
     ];

@@ -196,7 +196,7 @@ export default function AdminPretestResultsPage() {
         </div>
       </nav>
 
-      <main className="max-w-7xl mx-auto px-4 md:px-4 py-4 md:py-6">
+      <main className="max-w-7xl mx-auto px-4 md:px-6 py-4 md:py-6">
         {results.length === 0 ? (
           <Card>
             <CardContent className="p-8 text-center">

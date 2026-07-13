@@ -1,4 +1,4 @@
-import { requireAnyAuth, authError } from '@/lib/api-auth';
+import { requireAnyAuth, authError, buildInternalAuthHeaders } from '@/lib/api-auth';
 import { ApiErrors } from '@/lib/api-error';
 import { NextRequest, NextResponse } from 'next/server';
 import { LLMClient, Config, HeaderUtils } from 'coze-coding-dev-sdk';
@@ -80,13 +80,7 @@ export async function POST(request: NextRequest) {
 
     // 构造内部 API 调用所需的认证头，透传 Authorization 和 Cookie，
     // 避免 stream-handler/commands 中的内部 fetch 因缺失认证被拦截。
-    const internalAuthHeaders: Record<string, string> = {
-      'Content-Type': 'application/json',
-    };
-    const authHeader = request.headers.get('authorization');
-    if (authHeader) internalAuthHeaders['Authorization'] = authHeader;
-    const cookie = request.headers.get('cookie');
-    if (cookie) internalAuthHeaders['Cookie'] = cookie;
+    const internalAuthHeaders = buildInternalAuthHeaders(request);
 
     const customHeaders = HeaderUtils.extractForwardHeaders(request.headers);
     const config = new Config({
@@ -137,7 +131,8 @@ export async function POST(request: NextRequest) {
     if (teamId && assistantType === 'yinhe') {
       // 银蛇博士：获取小队端数据上下文
       const contextResponse = await fetch(
-        `${process.env.DEPLOY_RUN_PORT ? `http://localhost:${process.env.DEPLOY_RUN_PORT}` : 'http://localhost:5000'}/api/ai/context?teamId=${teamId}`
+        `${process.env.DEPLOY_RUN_PORT ? `http://localhost:${process.env.DEPLOY_RUN_PORT}` : 'http://localhost:5000'}/api/ai/context?teamId=${teamId}`,
+        { headers: internalAuthHeaders }
       );
       if (contextResponse.ok) {
         contextData = await contextResponse.json();
@@ -148,7 +143,8 @@ export async function POST(request: NextRequest) {
     } else if (userId && userRole && assistantType === 'laxiang') {
       // 蜡象助手：获取管理员端数据上下文
       const contextResponse = await fetch(
-        `${process.env.DEPLOY_RUN_PORT ? `http://localhost:${process.env.DEPLOY_RUN_PORT}` : 'http://localhost:5000'}/api/ai/context?userId=${userId}&userRole=${userRole}`
+        `${process.env.DEPLOY_RUN_PORT ? `http://localhost:${process.env.DEPLOY_RUN_PORT}` : 'http://localhost:5000'}/api/ai/context?userId=${userId}&userRole=${userRole}`,
+        { headers: internalAuthHeaders }
       );
       if (contextResponse.ok) {
         contextData = await contextResponse.json();

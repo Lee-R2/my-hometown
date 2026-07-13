@@ -4,6 +4,8 @@ import { useEffect, useState } from 'react';
 import { usePathname } from 'next/navigation';
 import dynamic from 'next/dynamic';
 import { DataSyncProvider } from '@/contexts/data-sync-context';
+import { BottomNav } from '@/components/bottom-nav';
+import { DashboardSkeleton } from '@/components/dashboard-skeleton';
 
 const AIAssistant = dynamic(() => import('@/components/ai-assistant'), {
   ssr: false,
@@ -70,17 +72,14 @@ export default function TeamLayout({
 
   // 其他页面等待检查完成
   if (!checked) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-green-500"></div>
-      </div>
-    );
+    return <DashboardSkeleton />;
   }
 
   return (
     <DataSyncProvider teamId={team?.id} enabled={!!team}>
       {children}
       {team && <AIAssistant assistantType="yinhe" position="bottom-right" teamId={team?.id} />}
+      <BottomNav />
     </DataSyncProvider>
   );
 }

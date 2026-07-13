@@ -191,7 +191,8 @@ async function executeSendMessage(
   senderId: string,
   senderRole: string,
   command: { type: string; targetName: string; content: string },
-  context?: { userRole?: string; schoolId?: string }
+  context?: { userRole?: string; schoolId?: string },
+  authHeaders?: Record<string, string>
 ): Promise<{ success: boolean; message: string; count?: number; error?: string }> {
   const { type, targetName, content } = command;
   const userRole = context?.userRole || senderRole;
@@ -402,9 +403,7 @@ async function executeSendMessage(
     
     const response = await fetch(apiUrl, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: authHeaders || { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         targetIds: targetIds,
         targetType: targetType,
@@ -855,7 +854,8 @@ export async function executeGenerateReport(
 export async function executeCommandChain(
   client: any,
   commands: Array<{ type: string; params: Record<string, any> }>,
-  context: { userId: string; userRole: string; schoolId?: string }
+  context: { userId: string; userRole: string; schoolId?: string },
+  authHeaders?: Record<string, string>
 ): Promise<Array<{ type: string; success: boolean; result: any; message: string }>> {
   const results: Array<{ type: string; success: boolean; result: any; message: string }> = [];
 
@@ -864,7 +864,7 @@ export async function executeCommandChain(
 
     switch (cmd.type) {
       case 'send_message':
-        result = await executeSendMessage(client, context.userId, context.userRole, cmd.params as any, { userRole: context.userRole, schoolId: context.schoolId });
+        result = await executeSendMessage(client, context.userId, context.userRole, cmd.params as any, { userRole: context.userRole, schoolId: context.schoolId }, authHeaders);
         break;
       case 'view_submission':
         result = await executeViewSubmission(client, cmd.params as any);

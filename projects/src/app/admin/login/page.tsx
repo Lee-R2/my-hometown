@@ -52,35 +52,35 @@ export default function AdminLoginPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-purple-50 via-pink-50 to-blue-50 flex items-center justify-center p-4">
+    <div className="min-h-screen bg-gradient-to-br from-purple-50 via-pink-50 to-blue-50 flex items-center justify-center p-4 md:p-6">
       <div className="w-full max-w-md">
         {/* 返回按钮 */}
         <a href="/" className="inline-block mb-4">
-          <Button variant="ghost" type="button">
+          <Button variant="ghost" type="button" className="text-sm md:text-base">
             <ArrowLeft className="w-4 h-4 mr-1" />
             返回首页
           </Button>
         </a>
 
         {/* Logo */}
-        <div className="text-center mb-6">
-          <div className="w-20 h-20 mx-auto mb-4 flex items-center justify-center overflow-hidden">
+        <div className="text-center mb-6 md:mb-8">
+          <div className="w-16 h-16 md:w-20 md:h-20 mx-auto mb-3 md:mb-4 flex items-center justify-center overflow-hidden">
             <img src="/admin-entry-icon.png" alt="Logo" className="w-full h-full object-cover" />
           </div>
-          <h1 className="text-2xl font-bold text-gray-900">管理员登录</h1>
-          <p className="text-sm text-gray-500 mt-1">我的家乡 - 科学探索之旅</p>
+          <h1 className="text-xl md:text-2xl font-bold text-gray-900">管理员登录</h1>
+          <p className="text-sm md:text-base text-gray-500 mt-1">我的家乡 - 科学探索之旅</p>
         </div>
 
         {/* 登录卡片 */}
         <Card className="shadow-lg border-0">
           <CardHeader>
-            <CardTitle>管理后台</CardTitle>
-            <CardDescription>管理员、志愿者老师、助学老师请登录</CardDescription>
+            <CardTitle className="text-lg md:text-xl">管理后台</CardTitle>
+            <CardDescription className="text-sm md:text-base">管理员、志愿者老师、助学老师请登录</CardDescription>
           </CardHeader>
           <CardContent>
-            <form onSubmit={handleLogin} className="space-y-4">
+            <form onSubmit={handleLogin} className="space-y-4 md:space-y-5">
               <div className="space-y-2">
-                <Label htmlFor="username">用户名</Label>
+                <Label htmlFor="username" className="text-sm md:text-base">用户名</Label>
                 <Input
                   id="username"
                   type="text"
@@ -88,10 +88,11 @@ export default function AdminLoginPage() {
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                   disabled={isLoading}
+                  className="h-11 md:h-10"
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="password">密码</Label>
+                <Label htmlFor="password" className="text-sm md:text-base">密码</Label>
                 <Input
                   id="password"
                   type="password"
@@ -99,6 +100,7 @@ export default function AdminLoginPage() {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   disabled={isLoading}
+                  className="h-11 md:h-10"
                 />
               </div>
 
@@ -111,7 +113,7 @@ export default function AdminLoginPage() {
 
               <Button
                 type="submit"
-                className="w-full bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600"
+                className="w-full h-11 md:h-10 bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-base"
                 disabled={isLoading}
               >
                 {isLoading ? '登录中...' : '登录'}

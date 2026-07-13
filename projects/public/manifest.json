@@ -1,0 +1,51 @@
+{
+  "name": "我们的家乡 — 少年数字乡建",
+  "short_name": "我们的家乡",
+  "description": "乡村少年 STEM 协作学习平台 — 小队协作完成任务，与银蛇博士对话，积累爱心碎片",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#4f46e5",
+  "orientation": "any",
+  "lang": "zh-CN",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "管理端",
+      "short_name": "管理",
+      "url": "/admin/login",
+      "description": "教师/管理员登录"
+    },
+    {
+      "name": "小队端",
+      "short_name": "小队",
+      "url": "/team/login",
+      "description": "小队登录完成任务"
+    },
+    {
+      "name": "家长端",
+      "short_name": "家长",
+      "url": "/parent/login",
+      "description": "家长查看进度"
+    }
+  ]
+}

@@ -2,12 +2,13 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import dynamic from "next/dynamic";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { 
+import {
   Rocket,
   Users,
   Trophy,
@@ -37,7 +38,12 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { useScrollPosition } from "@/hooks/use-scroll-position";
-import BlackboardSection from "@/components/blackboard-section";
+
+// 代码分割：黑板报组件（49KB）懒加载，减小 dashboard 初始 bundle
+const BlackboardSection = dynamic(() => import("@/components/blackboard-section"), {
+  ssr: false,
+  loading: () => null,
+});
 import { SubmissionReviewDialog } from "@/components/submission-review-dialog";
 
 interface Team {

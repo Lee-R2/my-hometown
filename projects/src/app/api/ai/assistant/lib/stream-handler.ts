@@ -24,6 +24,7 @@ export interface StreamHandlerContext {
   offTopicRatio: number;
   offTopicCount: number;
   totalAnalyzed: number;
+  authHeaders?: Record<string, string>;
 }
 
 /**
@@ -174,8 +175,11 @@ async function extractMemoriesFromConversation(
 export async function createStreamResponse(ctx: StreamHandlerContext): Promise<Response> {
   const {
     messages, model, request, teamId, sessionId, agentUsername, userName,
-    message, conversationRounds, dailyMinutes, offTopicRatio, offTopicCount, totalAnalyzed
+    message, conversationRounds, dailyMinutes, offTopicRatio, offTopicCount, totalAnalyzed,
+    authHeaders
   } = ctx;
+
+  const internalHeaders = authHeaders || { 'Content-Type': 'application/json' };
 
   // 调用LLM
   const customHeaders = HeaderUtils.extractForwardHeaders(request.headers);
@@ -231,7 +235,7 @@ export async function createStreamResponse(ctx: StreamHandlerContext): Promise<R
 
             const imageResponse = await fetch(`${baseUrl}/api/ai/yinhe-image`, {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
+              headers: internalHeaders,
               body: JSON.stringify({ prompt, teamId })
             });
 
@@ -275,7 +279,7 @@ export async function createStreamResponse(ctx: StreamHandlerContext): Promise<R
 
             const videoResponse = await fetch(`${baseUrl}/api/ai/yinhe-video`, {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
+              headers: internalHeaders,
               body: JSON.stringify({ prompt, duration, ratio, teamId })
             });
 

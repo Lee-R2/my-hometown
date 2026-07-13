@@ -130,6 +130,37 @@
   body {
     @apply bg-background text-foreground;
   }
+
+  /* 无障碍：键盘焦点可见样式增强 */
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+
+  /* 无障碍：屏幕阅读器专用 — 视觉隐藏但可读 */
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  /* 无障碍：尊重用户减少动画偏好 */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
 }
 
 body {
@@ -143,16 +174,21 @@ body {
     touch-action: manipulation;
     -webkit-tap-highlight-color: transparent;
   }
-  
+
   /* 移动端安全区域 */
   .safe-bottom {
     padding-bottom: env(safe-area-inset-bottom, 0);
   }
-  
+
   .safe-top {
     padding-top: env(safe-area-inset-top, 0);
   }
-  
+
+  .safe-x {
+    padding-left: env(safe-area-inset-left, 0);
+    padding-right: env(safe-area-inset-right, 0);
+  }
+
   /* 文本截断 */
   .line-clamp-2 {
     display: -webkit-box;
@@ -160,31 +196,31 @@ body {
     -webkit-box-orient: vertical;
     overflow: hidden;
   }
-  
+
   .line-clamp-3 {
     display: -webkit-box;
     -webkit-line-clamp: 3;
     -webkit-box-orient: vertical;
     overflow: hidden;
   }
-  
+
   /* 滚动优化 */
   .scrollbar-hide {
     -ms-overflow-style: none;
     scrollbar-width: none;
   }
-  
+
   .scrollbar-hide::-webkit-scrollbar {
     display: none;
   }
-  
+
   /* 移动端弹性滚动 */
   .overscroll-contain {
     overscroll-behavior: contain;
   }
 }
 
-/* 移动端弹窗优化 */
+/* === 移动端 (≤640px) === */
 @media (max-width: 640px) {
   /* 弹窗全屏或大比例 */
   .fixed.inset-0 .card,
@@ -192,38 +228,93 @@ body {
     max-height: 100vh;
     max-width: 100vw;
   }
-  
-  /* 表格横向滚动 */
+
+  /* 表格触摸滚动 */
   .overflow-x-auto {
     -webkit-overflow-scrolling: touch;
   }
-  
-  /* 输入框优化 */
+
+  /* 输入框优化 — 防止 iOS 聚焦缩放 + 触摸区域 */
   input, select, textarea {
-    font-size: 16px; /* 防止iOS缩放 */
+    font-size: 16px;
+    min-height: 44px;
   }
-  
-  /* 按钮触摸区域 */
+
+  /* 复选框/单选框触摸区域 — 最小 20px + 可点击标签 */
+  input[type="checkbox"],
+  input[type="radio"] {
+    width: 20px;
+    height: 20px;
+  }
+
+  /* 按钮触摸区域 — Apple HIG 建议 44px */
   button {
     min-height: 44px;
     min-width: 44px;
   }
-  
-  /* 小按钮例外 */
-  button.size-sm, button[class*="h-8"], button[class*="h-7"] {
+
+  /* 小按钮/图标按钮例外 */
+  button.size-sm,
+  button[class*="h-8"],
+  button[class*="h-7"],
+  button[class*="size-8"],
+  button[class*="size-7"] {
     min-height: 36px;
     min-width: 36px;
   }
+
+  /* 可点击的非 button 元素（div/a 带 cursor-pointer） */
+  [role="button"],
+  a.cursor-pointer {
+    min-height: 44px;
+    min-width: 44px;
+  }
+
+  /* 正文字号下限 — 确保 12px 提升到 13px */
+  .text-xs {
+    font-size: 0.8125rem; /* 13px，从 12px 提升 */
+    line-height: 1.25rem;
+  }
+
+  /* 任意值小字号兜底 — text-[10px]/text-[11px]/text-[12px] 在移动端提升到 12px */
+  .text-\[10px\],
+  .text-\[11px\],
+  .text-\[12px\] {
+    font-size: 0.75rem; /* 12px */
+    line-height: 1rem;
+  }
+
+  /* 卡片/列表项间距收紧 */
+  .card {
+    border-radius: 0.5rem;
+  }
+
+  /* 底部导航栏留白 — 避免内容被固定底部导航遮挡（h-14 = 56px） */
+  main {
+    padding-bottom: 3.5rem; /* 56px，与 BottomNav 高度一致 */
+  }
 }
 
-/* 平板优化 */
-@media (min-width: 640px) and (max-width: 1024px) {
-  /* 中等尺寸适配 */
+/* === 平板 (641px–1023px) === */
+@media (min-width: 641px) and (max-width: 1023px) {
+  /* 输入框恢复标准 */
+  input, select, textarea {
+    font-size: 16px;
+  }
 }
 
-/* 桌面端优化 */
+/* === 桌面端 (≥1024px) === */
 @media (min-width: 1024px) {
-  /* 大屏幕优化 */
+  /* 大屏输入框可缩小到 14px */
+  input, select, textarea {
+    font-size: 14px;
+  }
+}
+
+/* === 图片懒加载 — 利用 content-visibility 跳过屏幕外图片渲染 === */
+img {
+  content-visibility: auto;
+  contain-intrinsic-size: 200px 200px;
 }
 
 /* 打印样式 */

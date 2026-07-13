@@ -56,10 +56,16 @@ function extractRequestOrigin(request: NextRequest): string | null {
 
 /** 读取允许的域名列表 */
 function getAllowedOrigins(): string[] {
-  return (process.env.ALLOWED_ORIGINS || 'http://localhost:3000')
+  // 默认包含常用开发端口（3000/5000），生产环境需通过 ALLOWED_ORIGINS 配置
+  return (process.env.ALLOWED_ORIGINS || 'http://localhost:3000,http://localhost:5000')
     .split(',')
     .map((o) => o.trim())
     .filter(Boolean);
+}
+
+/** 判断是否为 localhost 开发环境 */
+function isLocalDevOrigin(origin: string): boolean {
+  return /^https?:\/\/localhost(:\d+)?$/.test(origin) || /^https?:\/\/127\.0\.0\.1(:\d+)?$/.test(origin);
 }
 
 /** 为响应注入安全响应头 */
@@ -91,11 +97,15 @@ export function middleware(request: NextRequest) {
     if (!SAFE_METHODS.includes(request.method.toUpperCase())) {
       const requestOrigin = extractRequestOrigin(request);
 
-      // Origin 和 Referer 都不存在，或不匹配允许域名，返回 403
-      if (!requestOrigin || !allowedOrigins.includes(requestOrigin)) {
-        return applySecurityHeaders(
-          NextResponse.json({ error: 'CSRF 校验失败：无效的来源' }, { status: 403 })
-        );
+      // 开发环境：允许 localhost 任意端口，便于本地调试
+      // 生产环境：必须匹配 ALLOWED_ORIGINS
+      if (!requestOrigin || (!isLocalDevOrigin(requestOrigin) && !allowedOrigins.includes(requestOrigin))) {
+        // 开发环境下，若无 Origin/Referer（同源请求可能不携带），放行
+        if (isProduction) {
+          return applySecurityHeaders(
+            NextResponse.json({ error: 'CSRF 校验失败：无效的来源' }, { status: 403 })
+          );
+        }
       }
     }
   }
