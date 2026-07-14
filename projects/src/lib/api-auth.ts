@@ -88,6 +88,7 @@ export function requireSuperAdmin(request: NextRequest): AuthResult {
   if (auth.payload!.role !== 'super_admin') {
     return {
       authenticated: false,
+      payload: null,
       status: 403,
       error: '需要超级管理员权限',
     };

@@ -23,7 +23,7 @@ export async function GET(request: NextRequest) {
     // 注意：parent_team_relations 表无 is_active/status 字段，只能校验存在关注关系
     const { data: follow, error: followError } = await supabase.from('parent_team_relations')
       .select('id')
-      .eq('parent_id', auth.payload.userId)
+      .eq('parent_id', auth.payload!.userId)
       .eq('team_id', teamId)
       .maybeSingle();
     if (followError) {
