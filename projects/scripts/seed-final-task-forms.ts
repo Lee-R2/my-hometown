@@ -9,8 +9,12 @@ dotenv.config({ path: '.env.local' });
 
 import { createClient } from '@supabase/supabase-js';
 
-const SUPABASE_URL = 'https://emfluysvhghloklrmcxi.supabase.co';
+const SUPABASE_URL = process.env.COZE_SUPABASE_URL || 'https://emfluysvhghloklrmcxi.supabase.co';
 const SUPABASE_SERVICE_KEY = process.env.COZE_SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+if (!SUPABASE_SERVICE_KEY) {
+  throw new Error('缺少环境变量 COZE_SUPABASE_SERVICE_ROLE_KEY 或 SUPABASE_SERVICE_ROLE_KEY');
+}
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 

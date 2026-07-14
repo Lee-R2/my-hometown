@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 /**
- * 安全中间件 — 集中处理 CORS、CSRF 校验和安全响应头。
+ * 安全代理 — 集中处理 CORS、CSRF 校验和安全响应头。
+ *
+ * Next.js 16 将 middleware 约定更名为 proxy，导出函数也从 middleware 改为 proxy。
+ * 参考: https://nextjs.org/docs/messages/middleware-to-proxy
  *
  * 修复历史：
  * - VULN-API-014 (P2): 全项目无 CORS 配置。同源应用对 /api/* 校验 Origin。
@@ -76,7 +79,7 @@ function applySecurityHeaders(response: NextResponse): NextResponse {
   return response;
 }
 
-export function middleware(request: NextRequest) {
+export function proxy(request: NextRequest) {
   const allowedOrigins = getAllowedOrigins();
   const isProduction = process.env.NODE_ENV === 'production';
 
