@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseClient } from '@/storage/database/supabase-client';
 import { requireAdminOrTeacher, authError, safeError } from '@/lib/api-auth';
 import { ApiErrors } from '@/lib/api-error';
+import { maskPhone } from '@/lib/security';
 
 export async function GET(request: NextRequest) {
   const auth = requireAdminOrTeacher(request);

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseClient } from '@/storage/database/supabase-client';
 import { requireAdmin, authError, safeError } from '@/lib/api-auth';
 import { ApiErrors } from '@/lib/api-error';
+import { maskPhone } from '@/lib/security';
 
 const supabase = getSupabaseClient();
 
