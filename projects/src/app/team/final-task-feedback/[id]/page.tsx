@@ -3,7 +3,7 @@
 // 该页面使用 useSearchParams()，禁用静态生成避免构建报错。
 export const dynamic = 'force-dynamic';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, Suspense } from 'react';
 import { useRouter, useParams, useSearchParams } from 'next/navigation';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -88,7 +88,7 @@ const ROLE_CONFIG: Record<string, { label: string; icon: string }> = {
   secret_scholar: { label: '秘语学者', icon: '📚' },
 };
 
-export default function FinalTaskFeedbackPage() {
+function FinalTaskFeedbackPageContent() {
   const router = useRouter();
   const params = useParams();
   const searchParams = useSearchParams();
@@ -681,5 +681,13 @@ export default function FinalTaskFeedbackPage() {
         )}
       </main>
     </div>
+  );
+}
+
+export default function FinalTaskFeedbackPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center text-gray-500">加载中...</div>}>
+      <FinalTaskFeedbackPageContent />
+    </Suspense>
   );
 }

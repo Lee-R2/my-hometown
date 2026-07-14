@@ -3,7 +3,7 @@
 // 该页面使用 useSearchParams()，禁用静态生成避免构建报错。
 export const dynamic = 'force-dynamic';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, Suspense } from 'react';
 import { useRouter, useParams, useSearchParams } from 'next/navigation';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -90,7 +90,7 @@ interface Reward {
   distribution_method?: string; // 数据库蛇形命名
 }
 
-export default function TaskSettingsPage() {
+function TaskSettingsPageContent() {
   const router = useRouter();
   const params = useParams();
   const searchParams = useSearchParams();
@@ -1556,5 +1556,13 @@ export default function TaskSettingsPage() {
         </div>
       )}
     </div>
+  );
+}
+
+export default function TaskSettingsPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center text-gray-500">加载中...</div>}>
+      <TaskSettingsPageContent />
+    </Suspense>
   );
 }

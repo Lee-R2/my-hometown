@@ -4,7 +4,7 @@
 // 仪表盘是动态客户端页面，直接禁用静态生成避免构建报错。
 export const dynamic = 'force-dynamic';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -130,7 +130,7 @@ interface TeamDetail {
   borrowRecords?: BorrowRecord[];
 }
 
-export default function ParentDashboard() {
+function ParentDashboardContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [parent, setParent] = useState<any>(null);
@@ -2569,5 +2569,13 @@ export default function ParentDashboard() {
       )}
 
     </div>
+  );
+}
+
+export default function ParentDashboard() {
+  return (
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center text-gray-500">加载中...</div>}>
+      <ParentDashboardContent />
+    </Suspense>
   );
 }

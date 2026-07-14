@@ -3,7 +3,7 @@
 // 该页面使用 useSearchParams()，禁用静态生成避免构建报错。
 export const dynamic = 'force-dynamic';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -23,7 +23,7 @@ const ITEM_TYPE_LABEL: Record<string, string> = {
   tool: '工具', skill: '技能', work: '作品',
 };
 
-export default function ListPage() {
+function ListPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const respondTo = searchParams.get('respond_to');
@@ -262,5 +262,13 @@ export default function ListPage() {
         </Button>
       </div>
     </div>
+  );
+}
+
+export default function ListPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center text-gray-500">加载中...</div>}>
+      <ListPageContent />
+    </Suspense>
   );
 }
