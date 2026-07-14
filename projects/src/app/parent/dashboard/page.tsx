@@ -1,5 +1,9 @@
 'use client';
 
+// 该页面使用 useSearchParams()，静态生成时需要 Suspense 边界。
+// 仪表盘是动态客户端页面，直接禁用静态生成避免构建报错。
+export const dynamic = 'force-dynamic';
+
 import { useState, useEffect } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 
