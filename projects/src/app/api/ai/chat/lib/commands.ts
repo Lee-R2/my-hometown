@@ -5,6 +5,8 @@
  * 原文件保持不变，本模块仅创建不引用。
  */
 
+import { getAppBaseUrl } from '@/lib/app-url';
+
 export async function processMediaCommands(
   fullResponse: string,
   teamId: string,
@@ -28,9 +30,7 @@ export async function processMediaCommands(
     const prompt = imageMatch[1].trim();
     console.log('[银蛇博士] 提取到的 prompt:', prompt);
     try {
-      const baseUrl = process.env.DEPLOY_RUN_PORT
-        ? `http://localhost:${process.env.DEPLOY_RUN_PORT}`
-        : 'http://localhost:5000';
+      const baseUrl = getAppBaseUrl();
 
       const response = await fetch(`${baseUrl}/api/ai/yinhe-image`, {
         method: 'POST',
@@ -62,9 +62,7 @@ export async function processMediaCommands(
     const ratio = videoMatch[3] || '16:9';
 
     try {
-      const baseUrl = process.env.DEPLOY_RUN_PORT
-        ? `http://localhost:${process.env.DEPLOY_RUN_PORT}`
-        : 'http://localhost:5000';
+      const baseUrl = getAppBaseUrl();
 
       const response = await fetch(`${baseUrl}/api/ai/yinhe-video`, {
         method: 'POST',
@@ -125,7 +123,7 @@ export async function extractAndForwardFeedback(
 
       try {
         await fetch(
-          `${process.env.DEPLOY_RUN_PORT ? `http://localhost:${process.env.DEPLOY_RUN_PORT}` : 'http://localhost:5000'}/api/ai/agent-communication`,
+          `${getAppBaseUrl()}/api/ai/agent-communication`,
           {
             method: 'POST',
             headers: internalHeaders,

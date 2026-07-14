@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { LLMClient, Config, HeaderUtils } from 'coze-coding-dev-sdk';
 import { saveConversation, addMemory } from '@/lib/agent-memory';
 import { AI_API_KEY, AI_BASE_URL, AI_MODEL_BASE_URL } from '@/lib/ai-config';
+import { getAppBaseUrl } from '@/lib/app-url';
 import type { Message } from './message-builder';
 
 /**
@@ -227,11 +228,7 @@ export async function createStreamResponse(ctx: StreamHandlerContext): Promise<R
 
           try {
             // 修复：使用环境变量构造 baseUrl，兼容生产环境部署
-            const baseUrl = process.env.NEXT_PUBLIC_BASE_URL ||
-              process.env.VERCEL_URL ||
-              (process.env.DEPLOY_RUN_PORT
-                ? `http://localhost:${process.env.DEPLOY_RUN_PORT}`
-                : 'http://localhost:5000');
+            const baseUrl = getAppBaseUrl();
 
             const imageResponse = await fetch(`${baseUrl}/api/ai/yinhe-image`, {
               method: 'POST',
@@ -271,11 +268,7 @@ export async function createStreamResponse(ctx: StreamHandlerContext): Promise<R
 
           try {
             // 修复：使用环境变量构造 baseUrl，兼容生产环境部署
-            const baseUrl = process.env.NEXT_PUBLIC_BASE_URL ||
-              process.env.VERCEL_URL ||
-              (process.env.DEPLOY_RUN_PORT
-                ? `http://localhost:${process.env.DEPLOY_RUN_PORT}`
-                : 'http://localhost:5000');
+            const baseUrl = getAppBaseUrl();
 
             const videoResponse = await fetch(`${baseUrl}/api/ai/yinhe-video`, {
               method: 'POST',

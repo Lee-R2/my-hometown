@@ -18,6 +18,7 @@ import { resolveTeamScope, getCrossAgentMemories, formatCrossAgentMemories, addM
 import { cleanTextForTTS, synthesizeSpeech, segmentTextForTTS } from './lib/tts-service';
 import { ApiErrors } from '@/lib/api-error';
 import { AI_API_KEY, AI_BASE_URL, AI_MODEL_BASE_URL } from '@/lib/ai-config';
+import { getAppBaseUrl } from '@/lib/app-url';
 
 /**
  * 格式化对话历史的时间标签
@@ -2509,7 +2510,7 @@ export async function POST(request: NextRequest) {
                         }
                         // 超级管理员 → 全局主题（is_exclusive=false, school_id=null）
                         
-                        const createRes = await fetch(`http://localhost:${process.env.DEPLOY_RUN_PORT || 5000}/api/ai/create-theme`, {
+                        const createRes = await fetch(`${getAppBaseUrl()}/api/ai/create-theme`, {
                           method: 'POST',
                           headers: internalAuthHeaders,
                           body: JSON.stringify({ ...themeData, is_exclusive, school_id, created_by: userId })
@@ -2570,7 +2571,7 @@ export async function POST(request: NextRequest) {
                             safeEnqueue(`data: ${JSON.stringify({ type: 'theme_update_error', error: `未找到主题: ${theme_id}` })}\n\n`);
                             fullResponse = fullResponse.replace(/\[修改主题\][\s\S]*?(?:\[\/修改主题\])?/, errorText);
                           } else {
-                            const updateRes = await fetch(`http://localhost:${process.env.DEPLOY_RUN_PORT || 5000}/api/themes/${resolved.id}`, {
+                            const updateRes = await fetch(`${getAppBaseUrl()}/api/themes/${resolved.id}`, {
                               method: 'PUT',
                               headers: internalAuthHeaders,
                               body: JSON.stringify(fieldsToUpdate)
@@ -2630,7 +2631,7 @@ export async function POST(request: NextRequest) {
                             safeEnqueue(`data: ${JSON.stringify({ type: 'final_task_config_error', error: `未找到主题: ${theme_id}` })}\n\n`);
                             fullResponse = fullResponse.replace(/\[配置最后任务\][\s\S]*?(?:\[\/配置最后任务\])?/, errorText);
                           } else {
-                            const configRes = await fetch(`http://localhost:${process.env.DEPLOY_RUN_PORT || 5000}/api/themes/${resolved.id}/auto-configure-final`, {
+                            const configRes = await fetch(`${getAppBaseUrl()}/api/themes/${resolved.id}/auto-configure-final`, {
                               method: 'POST',
                               headers: internalAuthHeaders
                             });
@@ -2727,7 +2728,7 @@ export async function POST(request: NextRequest) {
                           points: t.points || (t.difficulty === 'easy' ? 6 : t.difficulty === 'medium' ? 10 : 15)
                         }));
                         
-                        const createRes = await fetch(`http://localhost:${process.env.DEPLOY_RUN_PORT || 5000}/api/tasks`, {
+                        const createRes = await fetch(`${getAppBaseUrl()}/api/tasks`, {
                           method: 'POST',
                           headers: internalAuthHeaders,
                           body: JSON.stringify({
@@ -2884,7 +2885,7 @@ export async function POST(request: NextRequest) {
                           }
                           if (toolIds.length > 0) {
                             try {
-                              await fetch(`http://localhost:${process.env.DEPLOY_RUN_PORT || 5000}/api/tasks/${task.id}/tools`, {
+                              await fetch(`${getAppBaseUrl()}/api/tasks/${task.id}/tools`, {
                                 method: 'PUT',
                                 headers: internalAuthHeaders,
                                 body: JSON.stringify({ tools: toolIds.map(tid => ({ toolId: tid, isRequired: true })) })
@@ -2902,7 +2903,7 @@ export async function POST(request: NextRequest) {
                           }
                           if (skillIds.length > 0) {
                             try {
-                              await fetch(`http://localhost:${process.env.DEPLOY_RUN_PORT || 5000}/api/tasks/${task.id}/skills`, {
+                              await fetch(`${getAppBaseUrl()}/api/tasks/${task.id}/skills`, {
                                 method: 'PUT',
                                 headers: internalAuthHeaders,
                                 body: JSON.stringify({ skills: skillIds.map(sid => ({ skillId: sid, points: 5, isRequired: true })) })
@@ -2920,7 +2921,7 @@ export async function POST(request: NextRequest) {
                           }
                           if (rewardIds.length > 0) {
                             try {
-                              await fetch(`http://localhost:${process.env.DEPLOY_RUN_PORT || 5000}/api/tasks/${task.id}/rewards`, {
+                              await fetch(`${getAppBaseUrl()}/api/tasks/${task.id}/rewards`, {
                                 method: 'PUT',
                                 headers: internalAuthHeaders,
                                 body: JSON.stringify({ rewardIds })
@@ -3083,7 +3084,7 @@ export async function POST(request: NextRequest) {
                   }
                 }
                 
-                const createRes = await fetch(`http://localhost:${process.env.DEPLOY_RUN_PORT || 5000}/api/ai/create-theme`, {
+                const createRes = await fetch(`${getAppBaseUrl()}/api/ai/create-theme`, {
                   method: 'POST',
                   headers: internalAuthHeaders,
                   body: JSON.stringify({ ...themeData, is_exclusive, school_id, created_by: userId })
@@ -3131,7 +3132,7 @@ export async function POST(request: NextRequest) {
                     safeEnqueue(`data: ${JSON.stringify({ type: 'theme_update_error', error: `未找到主题: ${theme_id}` })}\n\n`);
                     fullResponse = fullResponse.replace(/\[修改主题\][\s\S]*?(?:\[\/修改主题\])?/, errorText);
                   } else {
-                    const updateRes = await fetch(`http://localhost:${process.env.DEPLOY_RUN_PORT || 5000}/api/themes/${resolved.id}`, {
+                    const updateRes = await fetch(`${getAppBaseUrl()}/api/themes/${resolved.id}`, {
                       method: 'PUT',
                       headers: internalAuthHeaders,
                       body: JSON.stringify(fieldsToUpdate)
@@ -3183,7 +3184,7 @@ export async function POST(request: NextRequest) {
                     safeEnqueue(`data: ${JSON.stringify({ type: 'final_task_config_error', error: `未找到主题: ${theme_id}` })}\n\n`);
                     fullResponse = fullResponse.replace(/\[配置最后任务\][\s\S]*?(?:\[\/配置最后任务\])?/, errorText);
                   } else {
-                    const configRes = await fetch(`http://localhost:${process.env.DEPLOY_RUN_PORT || 5000}/api/themes/${resolved.id}/auto-configure-final`, {
+                    const configRes = await fetch(`${getAppBaseUrl()}/api/themes/${resolved.id}/auto-configure-final`, {
                       method: 'POST',
                       headers: internalAuthHeaders
                     });
@@ -3264,7 +3265,7 @@ export async function POST(request: NextRequest) {
                     points: t.points || (t.difficulty === 'easy' ? 6 : t.difficulty === 'medium' ? 10 : 15)
                   }));
                   
-                  const createRes = await fetch(`http://localhost:${process.env.DEPLOY_RUN_PORT || 5000}/api/tasks`, {
+                  const createRes = await fetch(`${getAppBaseUrl()}/api/tasks`, {
                     method: 'POST',
                     headers: internalAuthHeaders,
                     body: JSON.stringify({
@@ -3408,7 +3409,7 @@ export async function POST(request: NextRequest) {
                     }
                     if (toolIds.length > 0) {
                       try {
-                        await fetch(`http://localhost:${process.env.DEPLOY_RUN_PORT || 5000}/api/tasks/${task.id}/tools`, {
+                        await fetch(`${getAppBaseUrl()}/api/tasks/${task.id}/tools`, {
                           method: 'PUT',
                           headers: internalAuthHeaders,
                           body: JSON.stringify({ tools: toolIds.map(tid => ({ toolId: tid, isRequired: true })) })
@@ -3425,7 +3426,7 @@ export async function POST(request: NextRequest) {
                     }
                     if (skillIds.length > 0) {
                       try {
-                        await fetch(`http://localhost:${process.env.DEPLOY_RUN_PORT || 5000}/api/tasks/${task.id}/skills`, {
+                        await fetch(`${getAppBaseUrl()}/api/tasks/${task.id}/skills`, {
                           method: 'PUT',
                           headers: internalAuthHeaders,
                           body: JSON.stringify({ skills: skillIds.map(sid => ({ skillId: sid, points: 5, isRequired: true })) })
@@ -3442,7 +3443,7 @@ export async function POST(request: NextRequest) {
                     }
                     if (rewardIds.length > 0) {
                       try {
-                        await fetch(`http://localhost:${process.env.DEPLOY_RUN_PORT || 5000}/api/tasks/${task.id}/rewards`, {
+                        await fetch(`${getAppBaseUrl()}/api/tasks/${task.id}/rewards`, {
                           method: 'PUT',
                           headers: internalAuthHeaders,
                           body: JSON.stringify({ rewardIds })

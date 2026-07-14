@@ -6,6 +6,7 @@
  */
 
 import { validateSqlSafety } from './sql-safety-filter';
+import { getAppBaseUrl } from '@/lib/app-url';
 
 interface QueryResult {
   success: boolean;
@@ -31,7 +32,7 @@ export async function execSqlSafe(sql: string): Promise<QueryResult> {
   try {
     // 使用 Next.js API 路由内部的 fetch 调用 exec_sql
     // 在沙箱环境中，通过 localhost 访问自身 API
-    const baseUrl = `http://localhost:${process.env.DEPLOY_RUN_PORT || 5000}`;
+    const baseUrl = getAppBaseUrl();
 
     // 方式1: 尝试调用内部查询 API
     const response = await fetch(`${baseUrl}/api/internal/query`, {

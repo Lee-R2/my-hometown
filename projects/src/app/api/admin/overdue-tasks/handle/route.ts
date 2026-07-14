@@ -78,7 +78,7 @@ export async function POST(request: NextRequest) {
     // 获取小队信息
     const { data: team, error: teamError } = await client
       .from('teams')
-      .select('id, name, points, current_theme_id, current_task_id')
+      .select('id, name, points, current_theme_id, current_task_id, cycle')
       .eq('id', teamId)
       .single();
     
@@ -226,24 +226,26 @@ export async function POST(request: NextRequest) {
       
       // 如果没有下一个任务，且当前是最后任务，则归档主题
       if (!nextTaskId && task.task_type === 'final') {
+        const cycle = team.cycle || 1;
+
         // 计算该主题获得的总积分
         const { data: themeSubmissions } = await client
           .from('task_submissions')
           .select('task_id, rating')
           .eq('team_id', teamId)
           .eq('status', 'approved');
-        
+
         const { data: themeTasks } = await client
           .from('tasks')
           .select('id, points')
           .eq('theme_id', task.theme_id)
           .eq('is_active', true);
-        
+
         const taskPointsMap = new Map((themeTasks || []).map((t: any) => [t.id, t.points]));
         const themeTotalPoints = (themeSubmissions || [])
           .filter((s: any) => taskPointsMap.has(s.task_id))
           .reduce((sum: number, s: any) => sum + (taskPointsMap.get(s.task_id) || 0), 0);
-        
+
         // 计算该主题获得的激励数量（只计算该主题下任务的激励）
         const themeTaskIds = (themeTasks || []).map((t: any) => t.id);
         let themeRewardsCount = 0;
@@ -255,33 +257,64 @@ export async function POST(request: NextRequest) {
             .in('task_id', themeTaskIds);
           themeRewardsCount = count || 0;
         }
-        
+
         // 计算完成任务数
         const completedTaskIds = new Set((themeSubmissions || []).map((s: any) => s.task_id));
         const themeTaskIdSet = new Set(themeTaskIds);
         const completedThemeTasks = [...completedTaskIds].filter(id => themeTaskIdSet.has(id)).length;
-        
-        // 创建主题完成记录
-        await client
+
+        // 步骤1：归档到 theme_completions（带 cycle，onConflict 含 cycle 防覆盖历史周期）
+        const { error: completionError } = await client
           .from('theme_completions')
           .upsert({
             team_id: teamId,
             theme_id: task.theme_id,
+            cycle: cycle,
             total_points: themeTotalPoints,
             total_rewards: themeRewardsCount || 0,
             total_tasks: completedThemeTasks,
             completed_at: new Date().toISOString(),
-          }, { onConflict: 'team_id,theme_id' });
-        
-        // 清空小队当前主题和积分（为新一轮做准备）
-        await client
-          .from('teams')
-          .update({ 
-            current_theme_id: null,
-            points: 0, // 积分清零，开始新一轮
-            updated_at: new Date().toISOString()
-          })
-          .eq('id', teamId);
+          }, { onConflict: 'team_id,theme_id,cycle' });
+
+        if (completionError) {
+          console.error('[overdue-skip] 归档主题完成记录失败，终止清零以防数据不一致:', {
+            teamId, themeId: task.theme_id, cycle, error: completionError.message,
+          });
+        } else {
+          // 步骤2：更新 team_theme_selections 为 completed
+          await client
+            .from('team_theme_selections')
+            .update({
+              status: 'completed',
+              completed_at: new Date().toISOString(),
+            })
+            .eq('team_id', teamId)
+            .eq('theme_id', task.theme_id)
+            .eq('cycle', cycle);
+
+          // 步骤3：重置 teams 表当前主题/任务状态 + cycle+1
+          // 积分跨周期累积，不清零；乐观锁 .eq('cycle', cycle) 防并发双归档
+          const { data: clearedTeam, error: clearError } = await client
+            .from('teams')
+            .update({
+              current_theme_id: null,
+              current_task_id: null,
+              next_task_deadline: null,
+              cycle: cycle + 1,
+              updated_at: new Date().toISOString()
+            })
+            .eq('id', teamId)
+            .eq('cycle', cycle)
+            .select('id');
+
+          if (clearError) {
+            console.error('[overdue-skip] 关键：归档已完成但 teams 清零失败，存在数据不一致风险:', {
+              teamId, themeId: task.theme_id, cycle, error: clearError.message,
+            });
+          } else if (!clearedTeam || clearedTeam.length === 0) {
+            console.warn(`[overdue-skip] 周期 ${cycle} 已被并发归档，跳过: team=${teamId}`);
+          }
+        }
       }
       
       message = '已跳过该任务，小队将进入下一任务';

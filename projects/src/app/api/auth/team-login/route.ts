@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseClient } from '@/storage/database/supabase-client';
-import { verifyPassword, hashPassword, needsRehash } from '@/lib/security';
+import { verifyPasswordAsync, hashPasswordAsync, needsRehash } from '@/lib/security';
 import { checkRateLimit, logRequest, getClientIP } from '@/lib/rate-limit';
 import { createSession, setSessionCookie } from '@/lib/session';
 import { safeError } from '@/lib/api-auth';
@@ -45,27 +45,12 @@ export async function POST(request: NextRequest) {
 
     const client = getSupabaseClient();
 
-    // 3. 查询小队（确保包含 is_active 字段）
-    // 先尝试精确匹配
+    // 3. 查询小队（直接用 ilike 不区分大小写，省去 eq→ilike 双查询）
     let { data: team, error: teamError } = await client
       .from('teams')
-      .select('*, is_active')
-      .eq('code', code)
+      .select('*')
+      .ilike('code', code)
       .single();
-
-    // 如果精确匹配失败，尝试不区分大小写匹配
-    if (teamError || !team) {
-      const { data: teamILike, error: teamILikeError } = await client
-        .from('teams')
-        .select('*, is_active')
-        .ilike('code', code)
-        .single();
-
-      if (!teamILikeError && teamILike) {
-        team = teamILike;
-        teamError = null;
-      }
-    }
 
     if (teamError || !team) {
       console.error('小队查询失败:', {
@@ -80,8 +65,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 4. 验证密码（使用哈希验证）
-    const isPasswordValid = verifyPassword(password, team.password);
+    // 4. 验证密码（异步 bcrypt.compare，不阻塞事件循环）
+    const isPasswordValid = await verifyPasswordAsync(password, team.password);
     if (!isPasswordValid) {
       await logRequest(ip, 'POST', '/api/auth/team-login', userAgent, team.id, 401);
       return NextResponse.json(
@@ -90,16 +75,15 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 4.1 若密码哈希为旧 SHA-256 算法，登录成功后自动升级为 bcrypt
+    // 4.1 若密码哈希为旧 SHA-256 算法，登录成功后自动升级为 bcrypt（fire-and-forget）
     if (needsRehash(team.password)) {
-      try {
-        await client
+      hashPasswordAsync(password).then((newHash) => {
+        client
           .from('teams')
-          .update({ password: hashPassword(password), updated_at: new Date().toISOString() })
-          .eq('id', team.id);
-      } catch {
-        // 升级失败不影响登录流程
-      }
+          .update({ password: newHash, updated_at: new Date().toISOString() })
+          .eq('id', team.id)
+          .then(undefined, () => {});
+      }, () => {});
     }
 
     // 5. 检查小队状态（NULL 或 true 视为活跃，false 视为禁用）
@@ -108,29 +92,26 @@ export async function POST(request: NextRequest) {
       return ApiErrors.forbidden('小队已被禁用，请联系管理员');
     }
 
-    // 6. 创建小队会话
-    const session = await createSession(team.id, 'team', team.school_id, ip, userAgent);
+    // 6. 创建会话 + 获取小队成员（并行，两者无依赖关系）
+    const [session, membersResult] = await Promise.all([
+      createSession(team.id, 'team', team.school_id, ip, userAgent),
+      client.from('team_members').select('*').eq('team_id', team.id),
+    ]);
+    const members = membersResult.data || [];
 
-    // 7. 获取小队成员
-    const { data: members } = await client
-      .from('team_members')
-      .select('*')
-      .eq('team_id', team.id);
-
-    // 8. 更新最后登录时间和 IP
-    await client
+    // 7. 非关键操作 fire-and-forget：更新登录时间 + 写日志
+    client
       .from('teams')
       .update({
         last_login_at: new Date().toISOString(),
         last_login_ip: ip,
         updated_at: new Date().toISOString(),
       })
-      .eq('id', team.id);
+      .eq('id', team.id)
+      .then(undefined, () => {});
+    logRequest(ip, 'POST', '/api/auth/team-login', userAgent, team.id, 200, Date.now() - startTime).then(undefined, () => {});
 
-    // 9. 记录成功登录
-    await logRequest(ip, 'POST', '/api/auth/team-login', userAgent, team.id, 200, Date.now() - startTime);
-
-    // 10. 返回小队信息（不包含密码）
+    // 8. 返回小队信息（不包含密码）
     const { password: _, ...teamWithoutPassword } = team;
 
     // 字段名映射：数据库蛇形命名 → 前端驼峰命名

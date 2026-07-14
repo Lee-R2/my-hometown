@@ -125,17 +125,27 @@ export async function GET(request: NextRequest) {
     if (error) throw error;
 
     const teamIds = [...new Set((posts || []).map((p: any) => p.team_id).filter(Boolean))];
+    const themeIds = [...new Set((posts || []).map((p: any) => p.theme_id).filter(Boolean))];
 
     let teamMap: Record<string, any> = {};
+    let themeMap: Record<string, any> = {};
 
-    if (teamIds.length > 0) {
-      const { data: teams } = await client
-        .from('teams')
-        .select('id, name, code, school_id')
-        .in('id', teamIds);
-      (teams || []).forEach((t: any) => { teamMap[t.id] = t; });
+    // teams 和 themes 查询并行
+    if (teamIds.length > 0 || themeIds.length > 0) {
+      const [teamsResult, themesResult] = await Promise.all([
+        teamIds.length > 0
+          ? client.from('teams').select('id, name, code, school_id').in('id', teamIds)
+          : Promise.resolve({ data: [] }),
+        themeIds.length > 0
+          ? client.from('task_themes').select('id, name').in('id', themeIds)
+          : Promise.resolve({ data: [] }),
+      ]);
 
-      const schoolIds = [...new Set((teams || []).map((t: any) => t.school_id).filter(Boolean))];
+      const teams = teamsResult.data || [];
+      const themes = themesResult.data || [];
+
+      // 查询学校名称
+      const schoolIds = [...new Set(teams.map((t: any) => t.school_id).filter(Boolean))];
       let schoolMap: Record<string, string> = {};
       if (schoolIds.length > 0) {
         const { data: schools } = await client
@@ -144,19 +154,10 @@ export async function GET(request: NextRequest) {
           .in('id', schoolIds);
         (schools || []).forEach((s: any) => { schoolMap[s.id] = s.name; });
       }
-      (teams || []).forEach((t: any) => {
+      teams.forEach((t: any) => {
         teamMap[t.id] = { ...t, school_name: schoolMap[t.school_id] || '' };
       });
-    }
-
-    const themeIds = [...new Set((posts || []).map((p: any) => p.theme_id).filter(Boolean))];
-    let themeMap: Record<string, any> = {};
-    if (themeIds.length > 0) {
-      const { data: themes } = await client
-        .from('task_themes')
-        .select('id, name')
-        .in('id', themeIds);
-      (themes || []).forEach((t: any) => { themeMap[t.id] = t; });
+      themes.forEach((t: any) => { themeMap[t.id] = t; });
     }
 
     const enrichedPosts = (posts || []).map((post: any) => ({
@@ -172,43 +173,33 @@ export async function GET(request: NextRequest) {
     let totalLikes = 0;
 
     if (allowedTeamIds !== null && allowedTeamIds.length > 0) {
-      const { count: pCount } = await client
+      // 先取 post ids（comment/like count 依赖）
+      const { data: scopePosts } = await client
         .from('blackboard_posts')
-        .select('*', { count: 'exact', head: true })
+        .select('id')
         .in('team_id', allowedTeamIds);
-      totalPosts = pCount || 0;
+      const scopePostIds = (scopePosts || []).map((p: any) => p.id);
+      totalPosts = scopePostIds.length;
 
-      const scopePostIds = (await client.from('blackboard_posts').select('id').in('team_id', allowedTeamIds)).data?.map((p: any) => p.id) || [];
       if (scopePostIds.length > 0) {
-        const { count: cCount } = await client
-          .from('blackboard_comments')
-          .select('*', { count: 'exact', head: true })
-          .in('post_id', scopePostIds);
-        totalComments = cCount || 0;
-
-        const { count: lCount } = await client
-          .from('blackboard_likes')
-          .select('*', { count: 'exact', head: true })
-          .in('post_id', scopePostIds);
-        totalLikes = lCount || 0;
+        // 2 个 count 查询并行
+        const [commentResult, likeResult] = await Promise.all([
+          client.from('blackboard_comments').select('*', { count: 'exact', head: true }).in('post_id', scopePostIds),
+          client.from('blackboard_likes').select('*', { count: 'exact', head: true }).in('post_id', scopePostIds),
+        ]);
+        totalComments = commentResult.count || 0;
+        totalLikes = likeResult.count || 0;
       }
     } else if (allowedTeamIds === null) {
-      const { count: pCount } = await client
-        .from('blackboard_posts')
-        .select('*', { count: 'exact', head: true })
-        .eq('is_deleted', false);
-      totalPosts = pCount || 0;
-
-      const { count: cCount } = await client
-        .from('blackboard_comments')
-        .select('*', { count: 'exact', head: true })
-        .eq('is_deleted', false);
-      totalComments = cCount || 0;
-
-      const { count: lCount } = await client
-        .from('blackboard_likes')
-        .select('*', { count: 'exact', head: true });
-      totalLikes = lCount || 0;
+      // admin 路径：3 个 count 查询并行
+      const [postsCountResult, commentsCountResult, likesCountResult] = await Promise.all([
+        client.from('blackboard_posts').select('*', { count: 'exact', head: true }).eq('is_deleted', false),
+        client.from('blackboard_comments').select('*', { count: 'exact', head: true }).eq('is_deleted', false),
+        client.from('blackboard_likes').select('*', { count: 'exact', head: true }),
+      ]);
+      totalPosts = postsCountResult.count || 0;
+      totalComments = commentsCountResult.count || 0;
+      totalLikes = likesCountResult.count || 0;
     }
 
     return NextResponse.json({

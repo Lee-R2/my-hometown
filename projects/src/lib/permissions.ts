@@ -232,6 +232,7 @@ export async function fetchRoleConfigs(): Promise<RoleConfig[]> {
   
   try {
     const response = await fetch('/api/permissions');
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
     
     if (data.success && data.configs) {

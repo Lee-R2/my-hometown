@@ -1,5 +1,6 @@
 import { processMediaCommands, extractAndForwardFeedback } from './commands';
 import { saveToMemory } from './memory';
+import { getAppBaseUrl } from '@/lib/app-url';
 
 /**
  * 流式响应处理器
@@ -211,7 +212,7 @@ export function createStreamResponse(ctx: StreamHandlerContext): Response {
               const themeJsonStr = createThemeMatch[1].trim();
               const themeData = JSON.parse(themeJsonStr);
 
-              const createRes = await fetch(`http://localhost:${process.env.DEPLOY_RUN_PORT || 5000}/api/ai/create-theme`, {
+              const createRes = await fetch(`${getAppBaseUrl()}/api/ai/create-theme`, {
                 method: 'POST',
                 headers: internalHeaders,
                 body: JSON.stringify({ ...themeData, userId, userRole })

@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseClient } from '@/storage/database/supabase-client';
-import { hashPassword, verifyPassword, needsRehash, maskPhone } from '@/lib/auth';
+import { hashPasswordAsync, verifyPasswordAsync, needsRehash, maskPhone } from '@/lib/security';
 import { safeError } from '@/lib/api-auth';
-import { checkRateLimit, getClientIP } from '@/lib/rate-limit';
+import { checkRateLimit, logRequest, getClientIP } from '@/lib/rate-limit';
+import { createSession, setSessionCookie } from '@/lib/session';
 import { ApiErrors } from '@/lib/api-error';
 
 const supabase = getSupabaseClient();
@@ -10,6 +11,8 @@ const supabase = getSupabaseClient();
 // 家长登录
 export async function POST(request: NextRequest) {
   const ip = getClientIP(request);
+  const userAgent = request.headers.get('user-agent') || '';
+  const startTime = Date.now();
 
   // 频率限制：防止暴力破解
   const rateLimitResult = await checkRateLimit(ip, 'login');
@@ -48,9 +51,9 @@ export async function POST(request: NextRequest) {
     if (parent.status === 'rejected') {
       // 被拒绝的账号，返回拒绝原因，允许用户修改后重新提交
       return NextResponse.json(
-        { 
-          success: false, 
-          error: '账号审核未通过，请根据拒绝原因修改信息后重新提交', 
+        {
+          success: false,
+          error: '账号审核未通过，请根据拒绝原因修改信息后重新提交',
           status: 'rejected',
           rejectedReason: parent.review_remark || '未说明原因',
           parent: {
@@ -72,8 +75,8 @@ export async function POST(request: NextRequest) {
       return ApiErrors.forbidden('账号已被禁用，请联系管理员');
     }
 
-    // 验证密码（安全修复：移除明文比对，仅使用哈希验证）
-    const isValidPassword = parent.password && await verifyPassword(password, parent.password);
+    // 验证密码（异步 bcrypt.compare，不阻塞事件循环）
+    const isValidPassword = parent.password && await verifyPasswordAsync(password, parent.password);
 
     if (!isValidPassword) {
       return NextResponse.json(
@@ -82,41 +85,27 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 密码哈希为旧 SHA-256 算法时，登录成功后自动升级为 bcrypt
+    // 密码哈希为旧 SHA-256 算法时，登录成功后自动升级为 bcrypt（fire-and-forget）
     if (needsRehash(parent.password)) {
-      try {
-        await supabase
+      hashPasswordAsync(password).then((newHash) => {
+        supabase
           .from('parents')
-          .update({ password: hashPassword(password), updated_at: new Date().toISOString() })
-          .eq('id', parent.id);
-      } catch {
-        // 升级失败不影响登录流程
-      }
+          .update({ password: newHash, updated_at: new Date().toISOString() })
+          .eq('id', parent.id)
+          .then(undefined, () => {});
+      }, () => {});
     }
 
-    // 获取关注的小队列表（包含历史记录）
-    const { data: follows } = await supabase
-      .from('parent_team_follows')
-      .select(`
-        id,
-        child_name,
-        child_grade,
-        is_active,
-        followed_at,
-        unfollowed_at,
-        team:teams(
-          id, 
-          name, 
-          slogan, 
-          points, 
-          cycle,
-          current_theme_id
-        )
-      `)
-      .eq('parent_id', parent.id)
-      .order('followed_at', { ascending: false });
+    // 创建会话（关键路径，需 await）
+    const session = await createSession(parent.id, 'parent', parent.school_id, ip, userAgent);
 
-    return NextResponse.json({
+    // 非关键操作 fire-and-forget：写日志
+    logRequest(ip, 'POST', '/api/auth/parent-login', userAgent, parent.id, 200, Date.now() - startTime)
+      .then(undefined, () => {});
+
+    // 关注的小队列表由 dashboard 自行 fetch（/api/parent/teams），登录时不 JOIN
+
+    const response = NextResponse.json({
       success: true,
       parent: {
         id: parent.id,
@@ -125,17 +114,30 @@ export async function POST(request: NextRequest) {
         school_id: parent.school_id,
         school_name: parent.school_name
       },
-      follows: follows || []
+      csrfToken: session.csrfToken,
     });
+
+    // 设置会话 Cookie
+    setSessionCookie(session.token, response);
+
+    // 安全响应头
+    response.headers.set('X-Content-Type-Options', 'nosniff');
+    response.headers.set('X-Frame-Options', 'DENY');
+    response.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+
+    return response;
 
   } catch (error: any) {
     console.error('[家长登录] 错误:', error);
-    return ApiErrors.validation('家长登录失败');
+    return safeError(error);
   }
 }
 
 // 注册家长账号
 export async function PUT(request: NextRequest) {
+  const ip = getClientIP(request);
+  const userAgent = request.headers.get('user-agent') || '';
+
   try {
     const body = await request.json();
     const { phone, password, name, school_id, school_name, relation, child_name, child_grade } = body;
@@ -167,11 +169,12 @@ export async function PUT(request: NextRequest) {
     if (existing) {
       if (existing.status === 'rejected') {
         // 被拒绝的账号，允许修改信息后重新提交
+        const hashedPassword = await hashPasswordAsync(password);
         const { data: updated, error: updateError } = await supabase
           .from('parents')
           .update({
             name,
-            password: hashPassword(password),
+            password: hashedPassword,
             school_id: school_id || null,
             school_name: school_name || null,
             relation: relation || null,
@@ -228,8 +231,7 @@ export async function PUT(request: NextRequest) {
     }
 
     // 创建新账号，直接通过审核
-    // 安全修复：密码哈希后存储
-    const hashedPassword = hashPassword(password);
+    const hashedPassword = await hashPasswordAsync(password);
     const { data: newParent, error } = await supabase
       .from('parents')
       .insert({
@@ -247,20 +249,13 @@ export async function PUT(request: NextRequest) {
 
     if (error) {
       console.error('[家长注册] 创建失败:', error);
-      // 根据不同的错误类型返回更详细的提示
-      let errorMessage = '注册失败，请稍后重试';
-      
-      if (error.code === '23505') {
-        errorMessage = '该手机号已注册，请直接登录';
-      } else if (error.code === '23503') {
-        errorMessage = '关联数据不存在，请检查学校信息';
-      }
-      
       return ApiErrors.validation('操作失败');
     }
 
-    // 直接返回成功登录信息
-    return NextResponse.json({
+    // 注册成功后自动登录：创建会话 + 设置 Cookie
+    const session = await createSession(newParent.id, 'parent', newParent.school_id, ip, userAgent);
+
+    const response = NextResponse.json({
       success: true,
       parent: {
         id: newParent.id,
@@ -269,10 +264,17 @@ export async function PUT(request: NextRequest) {
         school_id: newParent.school_id,
         school_name: newParent.school_name
       },
-      follows: []
+      csrfToken: session.csrfToken,
     });
+
+    setSessionCookie(session.token, response);
+    response.headers.set('X-Content-Type-Options', 'nosniff');
+    response.headers.set('X-Frame-Options', 'DENY');
+    response.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+
+    return response;
   } catch (error: any) {
     console.error('[家长注册] 错误:', error);
-    return ApiErrors.validation('家长注册失败');
+    return safeError(error);
   }
 }

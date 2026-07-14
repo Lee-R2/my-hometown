@@ -4,6 +4,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { LLMClient, Config, HeaderUtils } from 'coze-coding-dev-sdk';
 import { checkRateLimit, getClientIP } from '@/lib/rate-limit';
 import { AI_API_KEY, AI_BASE_URL, AI_MODEL_BASE_URL } from '@/lib/ai-config';
+import { getAppBaseUrl } from '@/lib/app-url';
 
 import { buildSystemPrompt } from './lib/system-prompts';
 import { saveToMemory, getRelevantMemories, getOrCreateSession } from './lib/memory';
@@ -131,7 +132,7 @@ export async function POST(request: NextRequest) {
     if (teamId && assistantType === 'yinhe') {
       // 银蛇博士：获取小队端数据上下文
       const contextResponse = await fetch(
-        `${process.env.DEPLOY_RUN_PORT ? `http://localhost:${process.env.DEPLOY_RUN_PORT}` : 'http://localhost:5000'}/api/ai/context?teamId=${teamId}`,
+        `${getAppBaseUrl()}/api/ai/context?teamId=${teamId}`,
         { headers: internalAuthHeaders }
       );
       if (contextResponse.ok) {
@@ -143,7 +144,7 @@ export async function POST(request: NextRequest) {
     } else if (userId && userRole && assistantType === 'laxiang') {
       // 蜡象助手：获取管理员端数据上下文
       const contextResponse = await fetch(
-        `${process.env.DEPLOY_RUN_PORT ? `http://localhost:${process.env.DEPLOY_RUN_PORT}` : 'http://localhost:5000'}/api/ai/context?userId=${userId}&userRole=${userRole}`,
+        `${getAppBaseUrl()}/api/ai/context?userId=${userId}&userRole=${userRole}`,
         { headers: internalAuthHeaders }
       );
       if (contextResponse.ok) {

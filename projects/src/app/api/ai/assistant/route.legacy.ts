@@ -15,6 +15,7 @@ import {
 } from '@/lib/agent-memory';
 import { LAXIANG_SHAREABLE_TYPES } from '@/lib/agent-scope';
 import { AI_API_KEY, AI_BASE_URL, AI_MODEL_BASE_URL } from '@/lib/ai-config';
+import { getAppBaseUrl } from '@/lib/app-url';
 
 /**
  * 智能体"银蛇博士"API
@@ -2364,9 +2365,7 @@ ${dataContext}`;
             })}\n\n`));
             
             try {
-              const baseUrl = process.env.DEPLOY_RUN_PORT 
-                ? `http://localhost:${process.env.DEPLOY_RUN_PORT}` 
-                : 'http://localhost:5000';
+              const baseUrl = getAppBaseUrl();
               
               const imageResponse = await fetch(`${baseUrl}/api/ai/yinhe-image`, {
                 method: 'POST',
@@ -2407,9 +2406,7 @@ ${dataContext}`;
             })}\n\n`));
             
             try {
-              const baseUrl = process.env.DEPLOY_RUN_PORT 
-                ? `http://localhost:${process.env.DEPLOY_RUN_PORT}` 
-                : 'http://localhost:5000';
+              const baseUrl = getAppBaseUrl();
               
               const videoResponse = await fetch(`${baseUrl}/api/ai/yinhe-video`, {
                 method: 'POST',

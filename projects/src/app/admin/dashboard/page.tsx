@@ -110,16 +110,44 @@ export default function AdminDashboard() {
   };
 
   useEffect(() => {
+    // 优先从 localStorage 读取用户数据（登录时已存储），免去 /api/auth/me 阻塞首屏
+    const cachedUser = localStorage.getItem('user');
+    if (cachedUser) {
+      try {
+        const cached = JSON.parse(cachedUser);
+        setUser(cached);
+        // 立即并行加载角色配置和仪表盘数据（不等待 /api/auth/me）
+        loadRoleConfig(cached.role as RoleType, true);
+        fetchDashboardData(cached.id, cached.role, cached.school_id);
+        // 后台静默验证认证状态（不阻塞首屏渲染）
+        fetch('/api/auth/me')
+          .then(res => res.ok ? res.json() : null)
+          .then(data => {
+            if (!data?.authenticated) {
+              window.location.href = '/admin/login';
+            } else {
+              setUser(data.user);
+            }
+          })
+          .catch(() => {/* 网络波动不跳转，数据 API 自身鉴权兜底 */});
+        return;
+      } catch {
+        // localStorage 解析失败，回退到 /api/auth/me
+      }
+    }
+
+    // 无缓存或解析失败：通过 /api/auth/me 获取用户数据
     const fetchUser = async () => {
       try {
         const res = await fetch('/api/auth/me');
+        if (!res.ok) throw new Error('auth failed');
         const data = await res.json();
         if (data.authenticated && data.user) {
           setUser(data.user);
           // 加载角色权限配置（强制刷新，获取最新配置）
           loadRoleConfig(data.user.role as RoleType, true);
           // 获取数据（传递用户ID和角色）
-          fetchDashboardData(data.user.id, data.user.role);
+          fetchDashboardData(data.user.id, data.user.role, data.user.school_id);
         } else {
           window.location.href = '/admin/login';
         }
@@ -134,6 +162,7 @@ export default function AdminDashboard() {
       try {
         // 检查权限更新时间戳
         const res = await fetch(`/api/sync?userId=${user?.id}&userRole=${user?.role}`);
+        if (!res.ok) return;
         const data = await res.json();
         
         if (data.success && data.status?.permissions) {
@@ -171,54 +200,40 @@ export default function AdminDashboard() {
     setRoleConfig(config || DEFAULT_ROLE_CONFIGS.find(c => c.role === role) || null);
   };
 
-  const fetchDashboardData = async (userId: string, userRole: string) => {
+  const fetchDashboardData = async (userId: string, userRole: string, schoolId?: string) => {
     setLoading(true);
     try {
-      // 同时获取统计数据和权限更新时间戳
-      const [statsRes, syncRes] = await Promise.all([
-        fetch(`/api/admin/stats?userId=${userId}&userRole=${userRole}`),
-        fetch(`/api/sync?userId=${userId}&userRole=${userRole}`)
-      ]);
-      
-      const statsData = await statsRes.json();
-      const syncData = await syncRes.json();
-      
-      if (statsData.success) {
-        setStats(statsData.stats);
+      // 并行获取所有独立数据（统计、权限同步、消息、关注申请、任务提示）
+      // 避免 me→stats→messages→follows→taskHints 串行瀑布流
+      const safeJson = (res: Response) =>
+        res.ok ? res.json().catch(() => null) : Promise.resolve(null);
+
+      const fetchEntries: { key: string; promise: Promise<any> }[] = [
+        { key: 'stats', promise: fetch(`/api/admin/stats?userId=${userId}&userRole=${userRole}`).then(safeJson) },
+        { key: 'sync', promise: fetch(`/api/sync?userId=${userId}&userRole=${userRole}`).then(safeJson) },
+      ];
+
+      if (userRole === 'volunteer' || userRole === 'teacher') {
+        fetchEntries.push({ key: 'messages', promise: fetch(`/api/messages?receiverId=${userId}`).then(safeJson) });
       }
-      
-      // 记录权限更新时间戳
-      if (syncData.success && syncData.status?.permissions) {
-        setLastPermissionUpdate(syncData.status.permissions);
+      if (userRole === 'admin' || userRole === 'super_admin' || userRole === 'teacher') {
+        fetchEntries.push({ key: 'follows', promise: fetch(`/api/admin/follows?userRole=${userRole}&schoolId=${schoolId || ''}`).then(safeJson) });
+      }
+      if (userRole === 'volunteer') {
+        fetchEntries.push({ key: 'taskHints', promise: fetch(`/api/admin/tasks/hints?userId=${userId}`).then(safeJson) });
       }
 
-      // 如果是志愿者或助学老师，获取未读消息数量
-      if (userRole === 'volunteer' || userRole === 'teacher') {
-        const msgRes = await fetch(`/api/messages?receiverId=${userId}`);
-        const msgData = await msgRes.json();
-        if (msgData.unreadCount !== undefined) {
-          setUnreadMessages(msgData.unreadCount);
-        }
+      const results = await Promise.all(fetchEntries.map(async e => ({ key: e.key, data: await e.promise })));
+      const map: Record<string, any> = {};
+      for (const r of results) map[r.key] = r.data;
+
+      if (map.stats?.success) setStats(map.stats.stats);
+      if (map.sync?.success && map.sync.status?.permissions) setLastPermissionUpdate(map.sync.status.permissions);
+      if (map.messages?.unreadCount !== undefined) setUnreadMessages(map.messages.unreadCount);
+      if (map.follows?.success && map.follows.follows) {
+        setPendingFollows(map.follows.follows.filter((f: any) => f.status === 'pending').length);
       }
-      
-      // 获取待审核关注申请数量（管理员和助学老师可见）
-      if (userRole === 'admin' || userRole === 'super_admin' || userRole === 'teacher') {
-        try {
-          const followsRes = await fetch(`/api/admin/follows?userRole=${userRole}&schoolId=${user?.school_id || ''}`);
-          const followsData = await followsRes.json();
-          if (followsData.success && followsData.follows) {
-            const pendingItems = followsData.follows.filter((f: any) => f.status === 'pending');
-            setPendingFollows(pendingItems.length);
-          }
-        } catch (error) {
-          console.error('获取待审核关注失败:', error);
-        }
-      }
-      
-      // 如果是志愿者，获取任务提示气泡数据
-      if (userRole === 'volunteer') {
-        await fetchTaskHints(userId);
-      }
+      if (map.taskHints?.success) setTaskHints(map.taskHints.hints || []);
     } catch (error) {
       console.error('获取统计数据失败:', error);
       toast.error('获取统计数据失败');
@@ -231,6 +246,7 @@ export default function AdminDashboard() {
   const fetchTaskHints = async (userId: string) => {
     try {
       const res = await fetch(`/api/admin/tasks/hints?userId=${userId}`);
+      if (!res.ok) return;
       const data = await res.json();
       
       if (data.success) {

@@ -4,6 +4,8 @@
  * 包含消息发送、产出查看、产出评价等命令的解析与执行逻辑
  */
 
+import { getAppBaseUrl } from '@/lib/app-url';
+
 // 获取产出详情
 async function getSubmissionDetail(client: any, submissionId: string): Promise<any> {
   // 直接查询，不使用外键关联
@@ -397,7 +399,7 @@ async function executeSendMessage(
     }
 
     // 调用消息中心API发送消息（服务器端直接调用本地地址）
-    const apiUrl = `http://localhost:${process.env.DEPLOY_RUN_PORT || 5000}/api/messages`;
+    const apiUrl = `${getAppBaseUrl()}/api/messages`;
     
     console.log('[蜡象助手] 调用消息中心API:', apiUrl, '目标数量:', targetIds.length);
     
@@ -643,7 +645,7 @@ async function resolveThemeId(
 
   // 按主题名称查询
   try {
-    const res = await fetch(`http://localhost:${process.env.DEPLOY_RUN_PORT || 5000}/api/ai/create-theme`, {
+    const res = await fetch(`${getAppBaseUrl()}/api/ai/create-theme`, {
       headers: authHeaders || {},
     });
     if (res.ok) {

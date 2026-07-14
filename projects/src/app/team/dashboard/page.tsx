@@ -554,7 +554,7 @@ export default function TeamDashboard() {
         }
       };
 
-      const [themesRes, taskRes, unreadRes, completionsRes, siblingTeamsRes, pretestRes, membersRes, borrowRes, transferRes, teamInfoRes] = await Promise.all([
+      const [themesRes, taskRes, unreadRes, completionsRes, siblingTeamsRes, pretestRes, borrowRes, transferRes] = await Promise.all([
         fetchSafe(themesUrl),
         fetchSafe(`/api/team/current-task?teamId=${teamObj.id}`),
         fetchSafe(`/api/team/notifications/unread-count?teamId=${teamObj.id}`),
@@ -565,14 +565,11 @@ export default function TeamDashboard() {
           : Promise.resolve({ ok: true, json: () => Promise.resolve({ teams: [] }) } as Response),
         // 获取前测状态
         fetchSafe(`/api/team/pretest?teamId=${teamObj.id}`),
-        // 获取成员列表
-        fetchSafe(`/api/teams/${teamObj.id}/members`),
         // 获取借积分待处理数量
         fetchSafe(`/api/team/borrow/history?team_id=${teamObj.id}`),
         // 获取收到的赠送积分数量
         fetchSafe(`/api/team/transfer/history?team_id=${teamObj.id}&type=received&limit=50`),
-        // 获取最新小队基本信息（name, slogan, rules 等）
-        fetchSafe(`/api/teams/${teamObj.id}`),
+        // 成员列表和小队基本信息已由 team-login API 返回并存储于 localStorage，无需重复请求
       ]);
 
       // 检查响应是否有效并解析JSON
@@ -596,10 +593,8 @@ export default function TeamDashboard() {
       const completionsData = await safeJsonParse(completionsRes, '已完成主题');
       const siblingTeamsData = await safeJsonParse(siblingTeamsRes, '同志愿者小队');
       const pretestData = await safeJsonParse(pretestRes, '前测');
-      const membersData = await safeJsonParse(membersRes, '成员');
       const borrowData = await safeJsonParse(borrowRes, '借积分');
       const transferData = await safeJsonParse(transferRes, '赠送积分');
-      const teamInfoData = await safeJsonParse(teamInfoRes, '小队信息');
 
       if (themesData?.themes) setThemes(themesData.themes);
       if (taskData?.task) setCurrentTask(taskData.task);
@@ -649,24 +644,12 @@ export default function TeamDashboard() {
       
       // 累积所有更新到 team 对象，最后一次性 setTeam 避免覆盖
       let teamUpdates: Partial<Team> = {};
-      
-      // 从 API 获取最新的小队基本信息（name, slogan, rules 等）
-      if (teamInfoData?.team) {
-        const apiTeam = teamInfoData.team;
-        // 同步 API 返回的基本字段到 team 对象
-        if (apiTeam.name) teamUpdates.name = apiTeam.name;
-        if (apiTeam.slogan !== undefined) teamUpdates.slogan = apiTeam.slogan;
-        if (apiTeam.rules !== undefined) teamUpdates.rules = apiTeam.rules;
-        if (apiTeam.has_completed_pretest) teamUpdates.hasCompletedPretest = true;
-        if (apiTeam.current_theme_id) teamUpdates.currentThemeId = apiTeam.current_theme_id;
-        if (apiTeam.current_task_id) teamUpdates.currentTaskId = apiTeam.current_task_id;
-        if (apiTeam.points !== undefined) teamUpdates.points = apiTeam.points;
-        if (apiTeam.cycle !== undefined) teamUpdates.cycle = apiTeam.cycle;
-      }
-      
-      // 更新成员数据到 team 对象
-      if (membersData?.members) {
-        teamUpdates.members = membersData.members;
+
+      // 小队基本信息（name, slogan, rules, points, cycle 等）和成员列表
+      // 已由 team-login API 返回并存储于 localStorage，无需再次请求
+      // 成员数据确保保留（来自登录缓存）
+      if (teamObj.members) {
+        teamUpdates.members = teamObj.members;
       }
       
       // 前测状态：同步 hasCompletedPretest 到 team 对象

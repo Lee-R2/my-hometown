@@ -35,10 +35,12 @@ export default function AdminLoginPage() {
 
       if (data.success) {
         // 只存最小化非敏感信息到 localStorage（认证依赖 HttpOnly Cookie）
+        // 含 school_id 以便 dashboard 免去 /api/auth/me 阻塞调用
         localStorage.setItem('user', JSON.stringify({
           id: data.user.id,
           name: data.user.name,
           role: data.user.role,
+          school_id: data.user.school_id || null,
         }));
         window.location.href = '/admin/dashboard';
       } else {

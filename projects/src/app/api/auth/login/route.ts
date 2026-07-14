@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseClient } from '@/storage/database/supabase-client';
-import { verifyPassword, checkPasswordStrength, hashPassword, needsRehash } from '@/lib/security';
+import { verifyPasswordAsync, hashPasswordAsync, needsRehash } from '@/lib/security';
 import { createSession, setSessionCookie } from '@/lib/session';
 import { checkRateLimit, logRequest, getClientIP } from '@/lib/rate-limit';
 import { safeError } from '@/lib/api-auth';
@@ -36,27 +36,12 @@ export async function POST(request: NextRequest) {
 
     const client = getSupabaseClient();
 
-    // 3. 查询用户（确保包含 is_active 字段）
-    // 先尝试精确匹配
+    // 3. 查询用户（直接用 ilike 不区分大小写，省去 eq→ilike 双查询）
     let { data: user, error: userError } = await client
       .from('users')
-      .select('*, is_active')
-      .eq('username', username)
+      .select('*')
+      .ilike('username', username)
       .single();
-
-    // 如果精确匹配失败，尝试不区分大小写匹配
-    if (userError || !user) {
-      const { data: userILike, error: userILikeError } = await client
-        .from('users')
-        .select('*, is_active')
-        .ilike('username', username)
-        .single();
-
-      if (!userILikeError && userILike) {
-        user = userILike;
-        userError = null;
-      }
-    }
 
     if (userError || !user) {
       console.error('用户查询失败:', {
@@ -71,23 +56,22 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 4. 验证密码（使用哈希验证）
-    const isPasswordValid = verifyPassword(password, user.password);
+    // 4. 验证密码（异步 bcrypt.compare，不阻塞事件循环）
+    const isPasswordValid = await verifyPasswordAsync(password, user.password);
     if (!isPasswordValid) {
       await logRequest(ip, 'POST', '/api/auth/login', userAgent, user.id, 401);
       return ApiErrors.unauthorized('密码错误');
     }
 
-    // 4.1 若密码哈希为旧 SHA-256 算法，登录成功后自动升级为 bcrypt
+    // 4.1 若密码哈希为旧 SHA-256 算法，登录成功后自动升级为 bcrypt（fire-and-forget）
     if (needsRehash(user.password)) {
-      try {
-        await client
+      hashPasswordAsync(password).then((newHash) => {
+        client
           .from('users')
-          .update({ password: hashPassword(password), updated_at: new Date().toISOString() })
-          .eq('id', user.id);
-      } catch {
-        // 升级失败不影响登录流程
-      }
+          .update({ password: newHash, updated_at: new Date().toISOString() })
+          .eq('id', user.id)
+          .then(undefined, () => {});
+      }, () => {});
     }
 
     // 5. 检查账号状态（NULL 或 true 视为活跃，false 视为禁用）
@@ -96,23 +80,22 @@ export async function POST(request: NextRequest) {
       return ApiErrors.forbidden('账号已被禁用，请联系管理员');
     }
 
-    // 6. 创建会话
+    // 6. 创建会话（关键路径，需 await）
     const session = await createSession(user.id, user.role, user.school_id, ip, userAgent);
 
-    // 7. 更新最后登录时间和 IP
-    await client
+    // 7. 非关键操作 fire-and-forget：更新登录时间 + 写日志
+    client
       .from('users')
       .update({
         last_login_at: new Date().toISOString(),
         last_login_ip: ip,
         updated_at: new Date().toISOString(),
       })
-      .eq('id', user.id);
+      .eq('id', user.id)
+      .then(undefined, () => {});
+    logRequest(ip, 'POST', '/api/auth/login', userAgent, user.id, 200, Date.now() - startTime).then(undefined, () => {});
 
-    // 8. 记录成功登录
-    await logRequest(ip, 'POST', '/api/auth/login', userAgent, user.id, 200, Date.now() - startTime);
-
-    // 9. 返回用户信息（不包含密码）
+    // 8. 返回用户信息（不包含密码）
     const { password: _, ...userWithoutPassword } = user;
 
     const response = NextResponse.json({

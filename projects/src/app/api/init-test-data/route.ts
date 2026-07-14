@@ -63,12 +63,13 @@ export async function POST(request: NextRequest) {
     }
 
     // 4. 创建全局管理员账号（密码哈希存储）
+    // 统一 admin 密码为 123456，与 init-users/route.ts 保持一致
     const { data: globalAdmin, error: globalAdminError } = await client
       .from('users')
       .upsert({
         id: 'admin-global-001',
         username: 'admin',
-        password: hashPassword('admin123'),
+        password: hashPassword('123456'),
         name: '系统管理员',
         role: 'admin',
         school_id: null,
@@ -153,7 +154,7 @@ export async function POST(request: NextRequest) {
       accounts: {
         schoolAdmin: { username: 'school_admin', password: '123456', school: '阳光小学' },
         volunteer: { username: 'volunteer', password: '123456', school: '阳光小学' },
-        globalAdmin: { username: 'admin', password: 'admin123' },
+        globalAdmin: { username: 'admin', password: '123456' },
       },
     });
   } catch (error) {

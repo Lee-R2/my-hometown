@@ -88,6 +88,12 @@ function getSupabaseCredentials(): SupabaseCredentials {
   return { url, anonKey, serviceRoleKey };
 }
 
+// ========== 单例客户端缓存 ==========
+// 避免每次 API 调用都 createClient，复用 HTTP keep-alive 连接
+let adminClientSingleton: SupabaseClient | null = null;
+let anonClientSingleton: SupabaseClient | null = null;
+const tokenClientCache = new Map<string, SupabaseClient>();
+
 function getSupabaseClient(token?: string): SupabaseClient {
   return getSupabaseAdminClient(token);
 }
@@ -95,30 +101,32 @@ function getSupabaseClient(token?: string): SupabaseClient {
 function getSupabaseAnonClient(token?: string): SupabaseClient {
   const { url, anonKey } = getSupabaseCredentials();
 
-  if (token) {
-    return createClient(url, anonKey, {
-      global: {
-        headers: { Authorization: `Bearer ${token}` },
-      },
-      db: {
-        timeout: 60000,
-      },
-      auth: {
-        autoRefreshToken: false,
-        persistSession: false,
-      },
-    });
+  // 无 token 时复用单例
+  if (!token) {
+    if (!anonClientSingleton) {
+      anonClientSingleton = createClient(url, anonKey, {
+        db: { timeout: 60000 },
+        auth: { autoRefreshToken: false, persistSession: false },
+      });
+    }
+    return anonClientSingleton;
   }
 
-  return createClient(url, anonKey, {
-    db: {
-      timeout: 60000,
-    },
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false,
-    },
-  });
+  // 有 token 时按 token 缓存（避免内存泄漏，限制缓存大小）
+  if (tokenClientCache.size > 50) {
+    tokenClientCache.clear();
+  }
+  const cacheKey = `anon:${token}`;
+  let client = tokenClientCache.get(cacheKey);
+  if (!client) {
+    client = createClient(url, anonKey, {
+      global: { headers: { Authorization: `Bearer ${token}` } },
+      db: { timeout: 60000 },
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+    tokenClientCache.set(cacheKey, client);
+  }
+  return client;
 }
 
 function getSupabaseAdminClient(token?: string): SupabaseClient {
@@ -129,23 +137,32 @@ function getSupabaseAdminClient(token?: string): SupabaseClient {
     return getSupabaseAnonClient(token);
   }
 
-  const options: Record<string, any> = {
-    db: {
-      timeout: 60000,
-    },
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false,
-    },
-  };
-
-  if (token) {
-    options.global = {
-      headers: { Authorization: `Bearer ${token}` },
-    };
+  // 无 token 时复用单例（绝大多数 API 调用走这里）
+  if (!token) {
+    if (!adminClientSingleton) {
+      adminClientSingleton = createClient(url, serviceRoleKey, {
+        db: { timeout: 60000 },
+        auth: { autoRefreshToken: false, persistSession: false },
+      });
+    }
+    return adminClientSingleton;
   }
 
-  return createClient(url, serviceRoleKey, options);
+  // 有 token 时按 token 缓存
+  if (tokenClientCache.size > 50) {
+    tokenClientCache.clear();
+  }
+  const cacheKey = `admin:${token}`;
+  let client = tokenClientCache.get(cacheKey);
+  if (!client) {
+    client = createClient(url, serviceRoleKey, {
+      global: { headers: { Authorization: `Bearer ${token}` } },
+      db: { timeout: 60000 },
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+    tokenClientCache.set(cacheKey, client);
+  }
+  return client;
 }
 
 export { loadEnv, getSupabaseCredentials, getSupabaseClient, getSupabaseAdminClient, getSupabaseAnonClient };

@@ -5,6 +5,7 @@ import { LLMClient, Config, HeaderUtils } from 'coze-coding-dev-sdk';
 import { getSupabaseClient } from '@/storage/database/supabase-client';
 import { checkRateLimit, getClientIP } from '@/lib/rate-limit';
 import { AI_API_KEY, AI_BASE_URL, AI_MODEL_BASE_URL } from '@/lib/ai-config';
+import { getAppBaseUrl } from '@/lib/app-url';
 
 // 智能体白名单
 const ALLOWED_AGENTS: Record<string, { username: string; role: string }> = {
@@ -983,7 +984,7 @@ export async function POST(request: NextRequest) {
     if (teamId && assistantType === 'yinhe') {
       // 银蛇博士：获取小队端数据上下文
       const contextResponse = await fetch(
-        `${process.env.DEPLOY_RUN_PORT ? `http://localhost:${process.env.DEPLOY_RUN_PORT}` : 'http://localhost:5000'}/api/ai/context?teamId=${teamId}`
+        `${getAppBaseUrl()}/api/ai/context?teamId=${teamId}`
       );
       if (contextResponse.ok) {
         contextData = await contextResponse.json();
@@ -994,7 +995,7 @@ export async function POST(request: NextRequest) {
     } else if (userId && userRole && assistantType === 'laxiang') {
       // 蜡象助手：获取管理员端数据上下文
       const contextResponse = await fetch(
-        `${process.env.DEPLOY_RUN_PORT ? `http://localhost:${process.env.DEPLOY_RUN_PORT}` : 'http://localhost:5000'}/api/ai/context?userId=${userId}&userRole=${userRole}`
+        `${getAppBaseUrl()}/api/ai/context?userId=${userId}&userRole=${userRole}`
       );
       if (contextResponse.ok) {
         contextData = await contextResponse.json();
@@ -2188,7 +2189,7 @@ JSON字段说明：
                 const themeJsonStr = createThemeMatch[1].trim();
                 const themeData = JSON.parse(themeJsonStr);
                 
-                const createRes = await fetch(`http://localhost:${process.env.DEPLOY_RUN_PORT || 5000}/api/ai/create-theme`, {
+                const createRes = await fetch(`${getAppBaseUrl()}/api/ai/create-theme`, {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({ ...themeData, userId, userRole })
@@ -2418,9 +2419,7 @@ async function processMediaCommands(fullResponse: string, teamId: string): Promi
     const prompt = imageMatch[1].trim();
     console.log('[银蛇博士] 提取到的 prompt:', prompt);
     try {
-      const baseUrl = process.env.DEPLOY_RUN_PORT 
-        ? `http://localhost:${process.env.DEPLOY_RUN_PORT}` 
-        : 'http://localhost:5000';
+      const baseUrl = getAppBaseUrl();
       
       const response = await fetch(`${baseUrl}/api/ai/yinhe-image`, {
         method: 'POST',
@@ -2452,9 +2451,7 @@ async function processMediaCommands(fullResponse: string, teamId: string): Promi
     const ratio = videoMatch[3] || '16:9';
     
     try {
-      const baseUrl = process.env.DEPLOY_RUN_PORT 
-        ? `http://localhost:${process.env.DEPLOY_RUN_PORT}` 
-        : 'http://localhost:5000';
+      const baseUrl = getAppBaseUrl();
       
       const response = await fetch(`${baseUrl}/api/ai/yinhe-video`, {
         method: 'POST',
@@ -2512,7 +2509,7 @@ async function extractAndForwardFeedback(
       
       try {
         await fetch(
-          `${process.env.DEPLOY_RUN_PORT ? `http://localhost:${process.env.DEPLOY_RUN_PORT}` : 'http://localhost:5000'}/api/ai/agent-communication`,
+          `${getAppBaseUrl()}/api/ai/agent-communication`,
           {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },

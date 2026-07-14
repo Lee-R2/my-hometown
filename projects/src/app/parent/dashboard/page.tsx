@@ -200,6 +200,7 @@ export default function ParentDashboard() {
       setSearchingSchool(true);
       try {
         const res = await fetch(`/api/parent/schools?keyword=${encodeURIComponent(schoolKeyword)}`);
+        if (!res.ok) return;
         const data = await res.json();
         if (data.success) {
           setSchoolResults(data.schools || []);
@@ -223,6 +224,7 @@ export default function ParentDashboard() {
     setLoading(true);
     try {
       const res = await fetch(`/api/parent/teams?parentId=${parentData.id}&includeHistory=${includeHistory}`);
+      if (!res.ok) return;
       const data = await res.json();
       if (data.success) {
         setFollows(data.teams || []);
@@ -254,6 +256,7 @@ export default function ParentDashboard() {
           url += `&grade=${encodeURIComponent(childGradeInForm)}`;
         }
         const res = await fetch(url);
+        if (!res.ok) return;
         const data = await res.json();
         if (data.success) {
           setSearchResults(data.teams || []);
@@ -285,6 +288,7 @@ export default function ParentDashboard() {
         url += `&grade=${encodeURIComponent(childGradeInForm)}`;
       }
       const res = await fetch(url);
+      if (!res.ok) return;
       const data = await res.json();
       if (data.success) {
         setSearchResults(data.teams || []);
@@ -338,6 +342,7 @@ export default function ParentDashboard() {
           guardianReason: editRelation === '其他' ? editGuardianReason : null,
         })
       });
+      if (!res.ok) return;
       const data = await res.json();
       if (data.success) {
         setEditingFollow(false);
@@ -398,6 +403,7 @@ export default function ParentDashboard() {
           schoolName: selectedSchool?.name
         })
       });
+      if (!res.ok) return;
       const data = await res.json();
       if (data.success) {
         await loadFollows(true);
@@ -428,6 +434,7 @@ export default function ParentDashboard() {
       const res = await fetch(`/api/parent/teams?followId=${followId}`, {
         method: 'DELETE'
       });
+      if (!res.ok) return;
       const data = await res.json();
       if (data.success) {
         await loadFollows(true);
@@ -447,6 +454,7 @@ export default function ParentDashboard() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ followId, newTeamId, childGrade })
       });
+      if (!res.ok) return;
       const data = await res.json();
       if (data.success) {
         alert('已切换到新小队，原小队数据已存档');
@@ -470,6 +478,7 @@ export default function ParentDashboard() {
     try {
       const teamId = selectedTeam.team?.id;
       const res = await fetch(`/api/parent/team-detail?teamId=${teamId}&childName=${encodeURIComponent(selectedChildName)}`);
+      if (!res.ok) return;
       const data = await res.json();
       if (data.success) {
         setSelectedTeam(data.data);
@@ -487,6 +496,7 @@ export default function ParentDashboard() {
     setSelectedChildGrade(follow.childGrade);
     try {
       const res = await fetch(`/api/parent/team-detail?teamId=${follow.team.id}&childName=${encodeURIComponent(follow.childName)}`);
+      if (!res.ok) return;
       const data = await res.json();
       if (data.success) {
         setSelectedTeam(data.data);

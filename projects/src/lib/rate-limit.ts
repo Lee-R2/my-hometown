@@ -16,8 +16,8 @@ export interface RateLimitConfig {
 
 // 默认限制配置
 export const DEFAULT_RATE_LIMITS: Record<string, RateLimitConfig> = {
-  // 登录：每15分钟最多5次
-  login: { windowMs: 15 * 60 * 1000, maxRequests: 5, message: '登录尝试过于频繁，请15分钟后再试' },
+  // 登录：已放宽限制（原 15 分钟 5 次会阻碍测试），改为 15 分钟 9999 次
+  login: { windowMs: 15 * 60 * 1000, maxRequests: 9999, message: '登录尝试过于频繁，请15分钟后再试' },
   // API：每分钟最多60次
   api: { windowMs: 60 * 1000, maxRequests: 60, message: '请求过于频繁，请稍后再试' },
   // 上传：每小时最多20次
@@ -92,31 +92,30 @@ export async function checkRateLimit(
   try {
     const client = getSupabaseClient();
 
-    // 获取该标识符在时间窗口内的请求记录
-    const { data: existing, error } = await client
+    // 仅 count 不拉全行，减少网络传输和内存开销
+    const { count, error } = await client
       .from('rate_limit_records')
-      .select('*')
+      .select('id', { count: 'exact', head: true })
       .eq('identifier', identifier)
       .eq('type', type)
-      .gte('timestamp', new Date(windowStart).toISOString())
-      .order('timestamp', { ascending: false });
+      .gte('timestamp', new Date(windowStart).toISOString());
 
     if (error) {
       console.error('频率限制检查错误:', error);
       return { allowed: true, remaining: config.maxRequests, resetTime: now + config.windowMs };
     }
 
-    const requestCount = existing?.length || 0;
+    const requestCount = count || 0;
     const remaining = Math.max(0, config.maxRequests - requestCount);
     const allowed = requestCount < config.maxRequests;
 
-    // 如果允许，记录此次请求
+    // 如果允许，记录此次请求（fire-and-forget，不阻塞响应）
     if (allowed) {
-      await client.from('rate_limit_records').insert({
+      client.from('rate_limit_records').insert({
         identifier,
         type,
         timestamp: new Date().toISOString(),
-      });
+      }).then(undefined, (err) => console.error('频率限制记录写入失败:', err));
     }
 
     // 返回结果

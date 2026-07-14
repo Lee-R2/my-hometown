@@ -68,6 +68,13 @@ export function hashPassword(password: string): string {
 }
 
 /**
+ * 异步哈希密码 — 不阻塞事件循环，推荐在 API 路由中使用
+ */
+export async function hashPasswordAsync(password: string): Promise<string> {
+  return bcrypt.hash(password, BCRYPT_COST_FACTOR);
+}
+
+/**
  * 验证密码（兼容 bcrypt 与旧 SHA-256 哈希）
  * - 新哈希（bcrypt，$2a$ / $2b$ / $2y$ 开头）：直接 bcrypt.compare
  * - 旧哈希（salt:hash 格式）：回退到 SHA-256 验证
@@ -107,6 +114,30 @@ export function verifyPassword(password: string, hashedPassword: string): boolea
     }
 
     return false;
+  } catch (error) {
+    console.error('密码验证错误:', error);
+    return false;
+  }
+}
+
+/**
+ * 异步验证密码 — 不阻塞事件循环，推荐在 API 路由中使用
+ * 语义与 verifyPassword 完全一致，仅改为异步 bcrypt.compare
+ */
+export async function verifyPasswordAsync(password: string, hashedPassword: string): Promise<boolean> {
+  try {
+    if (!hashedPassword) return false;
+
+    if (
+      hashedPassword.startsWith('$2a$') ||
+      hashedPassword.startsWith('$2b$') ||
+      hashedPassword.startsWith('$2y$')
+    ) {
+      return bcrypt.compare(password, hashedPassword);
+    }
+
+    // SHA-256 回退路径：CPU 密集但非事件循环瓶颈，直接调同步版
+    return verifyPassword(password, hashedPassword);
   } catch (error) {
     console.error('密码验证错误:', error);
     return false;

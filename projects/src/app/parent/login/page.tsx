@@ -48,7 +48,7 @@ export default function ParentLoginPage() {
         id: data.parent.id,
         name: data.parent.name,
       }));
-      localStorage.setItem('parent_follows', JSON.stringify(data.follows || []));
+      // follows 不再由登录接口返回，由 dashboard 自行 fetch
 
       router.push('/parent/dashboard');
     } catch (err) {

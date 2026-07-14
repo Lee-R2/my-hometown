@@ -602,7 +602,8 @@ async function finalizeFinalTask(
         .eq('cycle', cycle);
     }
 
-    // 步骤3：清零 teams 表（积分清零 + cycle+1）
+    // 步骤3：重置 teams 表当前主题/任务状态 + cycle+1
+    // 积分（points）、爱心碎片（heart_shards）、爱心宝石（heart_gems）均跨周期累积，不清零
     // 乐观锁：.eq('cycle', cycle) 防止并发双重归档导致 cycle 被多次递增
     const { data: clearedTeam, error: clearError } = await client
       .from('teams')
@@ -610,7 +611,6 @@ async function finalizeFinalTask(
         current_theme_id: null,
         current_task_id: null,
         next_task_deadline: null,
-        points: 0,
         cycle: cycle + 1,
         updated_at: new Date().toISOString()
       })
