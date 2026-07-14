@@ -1,5 +1,4 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import { execSync } from 'child_process';
 
 let envLoaded = false;
 
@@ -9,12 +8,24 @@ interface SupabaseCredentials {
   serviceRoleKey?: string;
 }
 
+/**
+ * 加载环境变量。
+ *
+ * 优先级：
+ * 1. 已存在的 process.env（Vercel/Docker 等平台已注入）
+ * 2. 本地 .env 文件（通过 dotenv 加载）
+ * 3. Coze 平台的 Python workload identity（仅本地开发兜底）
+ *
+ * 注意：execSync + python3 的 Coze 兜底逻辑仅在非构建环境执行，
+ * 避免 Vercel 构建时因缺少 python3 / coze_workload_identity 而失败。
+ */
 function loadEnv(): void {
   if (envLoaded || (process.env.COZE_SUPABASE_URL && process.env.COZE_SUPABASE_ANON_KEY)) {
     return;
   }
 
   try {
+    // 尝试 dotenv 加载 .env 文件
     try {
       require('dotenv').config();
       if (process.env.COZE_SUPABASE_URL && process.env.COZE_SUPABASE_ANON_KEY) {
@@ -25,6 +36,17 @@ function loadEnv(): void {
       // dotenv not available
     }
 
+    // 仅在非构建环境尝试 Coze Python 注入（Vercel 构建环境无 python3）
+    const isBuildPhase = !process.env.COZE_SUPABASE_URL && (
+      process.env.NEXT_PHASE === 'phase-production-build' ||
+      process.env.CI === 'true' ||
+      process.env.VERCEL === '1'
+    );
+    if (isBuildPhase) {
+      return;
+    }
+
+    const { execSync } = require('child_process');
     const pythonCode = `
 import os
 import sys
