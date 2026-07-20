@@ -1,7 +1,6 @@
-import { requireAnyAuth, requireAdminOrVolunteer, authError, safeError } from '@/lib/api-auth';
+import { requireAnyAuth, requireAdminOrVolunteer, authError, safeError, getAuthenticatedClient } from '@/lib/api-auth';
 import { supabaseErrorResponse, ApiErrors } from '@/lib/api-error';
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
 import { hashPassword } from '@/lib/security';
 
 /**
@@ -62,11 +61,11 @@ async function generateTeamCodes(client: any, count: number): Promise<string[]> 
 
 
 export async function GET(request: NextRequest) {
-  const auth = requireAnyAuth(request);
+  const auth = await requireAnyAuth(request);
   if (!auth.authenticated) return authError(auth);
 
   try {
-    const client = getSupabaseClient();
+    const client = getAuthenticatedClient(request, auth);
     const { searchParams } = new URL(request.url);
     // 身份从认证令牌获取，防止客户端伪造角色查看越权数据
     const userId = auth.payload!.userId;
@@ -183,12 +182,12 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const auth = requireAdminOrVolunteer(request);
+  const auth = await requireAdminOrVolunteer(request);
   if (!auth.authenticated) return authError(auth);
 
   try {
     const body = await request.json();
-    const client = getSupabaseClient();
+    const client = getAuthenticatedClient(request, auth);
 
     // 身份从认证令牌获取，防止客户端伪造归属
     const userId = auth.payload!.userId;

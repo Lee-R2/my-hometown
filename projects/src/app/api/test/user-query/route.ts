@@ -1,15 +1,21 @@
 import { requireAdmin, authError, safeError } from '@/lib/api-auth';
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import { ApiErrors } from '@/lib/api-error';
 
 /**
  * 用户查询测试 API
  * 用于测试用户查询逻辑
+ * SEC-004: 生产环境禁用,仅开发环境可用
  */
 
 export async function POST(request: NextRequest) {
-  const auth = requireAdmin(request);
+  // SEC-004: 测试接口不应在生产环境暴露,即使有 requireAdmin 保护
+  if (process.env.NODE_ENV === 'production') {
+    return NextResponse.json({ error: 'Not Found' }, { status: 404 });
+  }
+
+  const auth = await requireAdmin(request);
   if (!auth.authenticated) return authError(auth);
 
   try {
@@ -19,7 +25,7 @@ export async function POST(request: NextRequest) {
       return ApiErrors.validation('请提供用户名');
     }
 
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
 
     // 测试1：直接查询所有用户
     const { data: allUsers, error: allUsersError } = await client

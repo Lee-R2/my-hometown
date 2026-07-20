@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { safeGetJSON } from '@/lib/utils';
 import { useRouter, useParams } from 'next/navigation';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -89,9 +90,9 @@ export default function VolunteerDetailPage() {
 
   useEffect(() => {
     // 获取当前用户
-    const userData = localStorage.getItem('user');
+    const userData = safeGetJSON<{ id: string; role: string } | null>('user', null);
     if (userData) {
-      setCurrentUser(JSON.parse(userData));
+      setCurrentUser(userData);
     }
     
     fetchVolunteerDetail();

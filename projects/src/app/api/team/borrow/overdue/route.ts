@@ -1,15 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireTeam, authError, safeError } from '@/lib/api-auth';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { requireTeam, authError, safeError, getAuthenticatedClient } from '@/lib/api-auth';
 import { ApiErrors } from '@/lib/api-error';
-
-const supabase = getSupabaseClient();
 
 // 逾期检查和自动还款
 export async function POST(request: NextRequest) {
-  const auth = requireTeam(request);
+  const auth = await requireTeam(request);
   if (!auth.authenticated) return authError(auth);
   try {
+    const supabase = getAuthenticatedClient(request, auth);
     const body = await request.json();
     const { action = 'check' } = body;
 
@@ -58,11 +56,14 @@ export async function POST(request: NextRequest) {
           totalRepay = Math.round((totalRepay + overdueInterest) * 10) / 10;
 
           // 如果状态还是approved，更新为 overdue
+          // LE-P15: 带乐观锁防止并发处理(状态已是 overdue/repaid 时跳过)
           if (record.status === 'approved') {
             await supabase
               .from('point_borrows')
               .update({ status: 'overdue' })
-              .eq('id', record.id);
+              .eq('id', record.id)
+              .eq('status', 'approved')
+              .select('id');
           }
         }
 
@@ -122,7 +123,14 @@ export async function POST(request: NextRequest) {
             }
 
             // 2. 增加借出小队积分（乐观锁 + 回滚）
-            const lenderCurrentPoints = lenderTeam?.points || 0;
+            // LE-P07: 重新查询借出方当前积分,避免使用初始查询的快照值
+            // (循环中借出方可能被其他请求修改积分,快照值会导致乐观锁必然失败)
+            const { data: freshLender } = await supabase
+              .from('teams')
+              .select('id, points')
+              .eq('id', lenderTeam?.id)
+              .single();
+            const lenderCurrentPoints = freshLender?.points ?? lenderTeam?.points ?? 0;
             const newLenderPoints = Math.round((lenderCurrentPoints + freshActualRepay) * 10) / 10;
             const { data: creditedLender } = await supabase
               .from('teams')
@@ -166,17 +174,33 @@ export async function POST(request: NextRequest) {
               .select('id');
 
             if (!statusUpdate || statusUpdate.length === 0) {
-              // 状态已被并发处理，回滚积分转移
-              await supabase
+              // LE-P13: 状态已被并发处理，回滚积分转移(带 .select('id') 验证)
+              const rbBorrower = await supabase
                 .from('teams')
                 .update({ points: borrowerCurrentPoints })
                 .eq('id', borrowerTeam.id)
-                .eq('points', newBorrowerPoints);
-              await supabase
+                .eq('points', newBorrowerPoints)
+                .select('id');
+              if (!rbBorrower.data || rbBorrower.data.length === 0) {
+                console.error('[overdue] 回滚借入方积分失败,可能产生积分差异', {
+                  borrowerId: borrowerTeam.id,
+                  expectedPoints: borrowerCurrentPoints,
+                  deductedPoints: newBorrowerPoints,
+                });
+              }
+              const rbLender = await supabase
                 .from('teams')
                 .update({ points: lenderCurrentPoints })
                 .eq('id', lenderTeam?.id)
-                .eq('points', newLenderPoints);
+                .eq('points', newLenderPoints)
+                .select('id');
+              if (!rbLender.data || rbLender.data.length === 0) {
+                console.error('[overdue] 回滚借出方积分失败,可能产生积分差异', {
+                  lenderId: lenderTeam?.id,
+                  expectedPoints: lenderCurrentPoints,
+                  creditedPoints: newLenderPoints,
+                });
+              }
               continue;
             }
 
@@ -235,8 +259,9 @@ export async function POST(request: NextRequest) {
 
             results.autoRepaid++;
           } else if (borrowerTeam && borrowerTeam.points === 0) {
-            // 积分为零，无法自动还款，保持债务状态（标记为 partial_repaid 并记录未还金额，而非豁免债务）
-            await supabase
+            // LE-P14: 积分为零，无法自动还款，保持债务状态（标记为 partial_repaid 并记录未还金额）
+            // 带乐观锁 + .select('id') 验证,防止并发处理时丢失状态变更
+            const { data: zeroPointUpdate } = await supabase
               .from('point_borrows')
               .update({
                 status: 'partial_repaid',
@@ -245,7 +270,12 @@ export async function POST(request: NextRequest) {
                 unpaid_points: totalRepay
               })
               .eq('id', record.id)
-              .in('status', ['approved', 'overdue', 'partial_repaid']);
+              .in('status', ['approved', 'overdue', 'partial_repaid'])
+              .select('id');
+            if (!zeroPointUpdate || zeroPointUpdate.length === 0) {
+              // 状态已被并发处理,跳过此记录
+              continue;
+            }
           }
 
           results.processed++;
@@ -310,9 +340,10 @@ export async function POST(request: NextRequest) {
 
 // 获取逾期统计
 export async function GET(request: NextRequest) {
-  const auth = requireTeam(request);
+  const auth = await requireTeam(request);
   if (!auth.authenticated) return authError(auth);
   try {
+    const supabase = getAuthenticatedClient(request, auth);
     const { data: borrowRecords, error } = await supabase
       .from('point_borrows')
       .select(`

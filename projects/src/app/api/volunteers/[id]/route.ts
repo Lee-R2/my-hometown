@@ -1,223 +1,186 @@
-import { requireAnyAuth, requireAdminOrTeacher, authError, safeError } from '@/lib/api-auth';
+import { requireAdminOrTeacher, authError, safeError } from '@/lib/api-auth';
 import { supabaseErrorResponse, ApiErrors } from '@/lib/api-error';
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
-import { hashPassword } from '@/lib/security';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 
-export async function GET(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const auth = requireAnyAuth(request);
+// 批量分配志愿者到老师
+export async function POST(request: NextRequest) {
+  const auth = await requireAdminOrTeacher(request);
   if (!auth.authenticated) return authError(auth);
 
   try {
-    const { id } = await params;
-    const client = getSupabaseClient();
+    const body = await request.json();
+    const client = getSupabaseAdminClient();
 
-    // 获取志愿者信息
-    const { data: volunteer, error: volunteerError } = await client
-      .from('users')
-      .select('id, username, name, role, school_id, assigned_teacher_id, created_at')
-      .eq('id', id)
-      .eq('role', 'volunteer')
+    const { schoolId, assignments } = body;
+    // assignments 格式: [{ teacherId: string, volunteerIds: string[] }]
+
+    if (!schoolId) {
+      return ApiErrors.validation('学校ID不能为空');
+    }
+
+    if (!assignments || !Array.isArray(assignments)) {
+      return ApiErrors.validation('请提供分配信息');
+    }
+
+    // 验证学校是否存在
+    const { data: school, error: schoolError } = await client
+      .from('schools')
+      .select('id, name')
+      .eq('id', schoolId)
       .single();
 
-    if (volunteerError || !volunteer) {
-      return ApiErrors.notFound('志愿者不存在');
+    if (schoolError || !school) {
+      return ApiErrors.notFound('学校不存在');
     }
 
-    // 获取关联的学校信息
-    let school = null;
-    if (volunteer.school_id) {
-      const { data: schoolData } = await client
-        .from('schools')
-        .select('id, name, address')
-        .eq('id', volunteer.school_id)
-        .single();
-      school = schoolData;
-    }
-
-    // 获取对接老师信息
-    let assignedTeacher = null;
-    if (volunteer.assigned_teacher_id) {
-      const { data: teacherData } = await client
+    // 先取消该学校所有志愿者的分配，让志愿者恢复自由状态
+    // 获取该学校所有老师的ID
+    const { data: teachers } = await client
+      .from('users')
+      .select('id')
+      .eq('school_id', schoolId)
+      .in('role', ['teacher', 'admin']);
+    
+    const teacherIds = (teachers || []).map(t => t.id);
+    
+    // 取消这些老师名下的志愿者分配，并将志愿者设为自由状态（school_id 设为 null）
+    if (teacherIds.length > 0) {
+      await client
         .from('users')
-        .select('id, username, name')
-        .eq('id', volunteer.assigned_teacher_id)
-        .single();
-      assignedTeacher = teacherData;
+        .update({ assigned_teacher_id: null, school_id: null })
+        .in('assigned_teacher_id', teacherIds)
+        .eq('role', 'volunteer');
     }
 
-    // 获取该志愿者创建的小队
-    const { data: volunteerTeams, count: volunteerTeamCount } = await client
-      .from('teams')
-      .select('id, code, name, points, status, current_theme_id, created_at, created_by, teacher_id, school_id', { count: 'exact' })
-      .or(`created_by.eq.${id},assigned_volunteer_id.eq.${id}`)
-      .order('created_at', { ascending: false });
-
-    let teams = volunteerTeams || [];
-
-    // 获取每个小队当前主题名称
-    const themeIds = teams.map(t => t.current_theme_id).filter(Boolean);
-    if (themeIds.length > 0) {
-      const { data: themes } = await client
-        .from('task_themes')
-        .select('id, name')
-        .in('id', themeIds);
+    // 按照新的分配关系更新
+    let totalAssigned = 0;
+    for (const assignment of assignments) {
+      const { teacherId, volunteerIds } = assignment;
       
-      const themeMap = new Map((themes || []).map(t => [t.id, t.name]));
-      teams = teams.map(t => ({
-        ...t,
-        themeName: t.current_theme_id ? themeMap.get(t.current_theme_id) : null,
-        createdByVolunteer: true,
-      }));
-    } else {
-      teams = teams.map(t => ({
-        ...t,
-        themeName: null,
-        createdByVolunteer: true,
-      }));
-    }
+      if (volunteerIds && volunteerIds.length > 0) {
+        const { error: updateError } = await client
+          .from('users')
+          .update({ 
+            assigned_teacher_id: teacherId,
+            school_id: schoolId 
+          })
+          .in('id', volunteerIds)
+          .eq('role', 'volunteer');
 
-    // 获取志愿者审核的产出数量
-    const { count: reviewedCount } = await client
-      .from('task_submissions')
-      .select('*', { count: 'exact', head: true })
-      .eq('reviewer_id', id);
-
-    // 获取待审核的产出数量（该志愿者创建的小队的待审核产出）
-    const teamIds = teams.map(t => t.id);
-    let pendingCount = 0;
-    if (teamIds.length > 0) {
-      const { count } = await client
-        .from('task_submissions')
-        .select('*', { count: 'exact', head: true })
-        .in('team_id', teamIds)
-        .eq('status', 'pending');
-      pendingCount = count || 0;
+        if (updateError) {
+          console.error('分配志愿者失败:', updateError);
+        } else {
+          totalAssigned += volunteerIds.length;
+        }
+      }
     }
 
     return NextResponse.json({
-      volunteer: {
-        ...volunteer,
-        school,
-        assignedTeacher,
-      },
-      teams,
-      stats: {
-        teamCount: volunteerTeamCount || 0,
-        reviewedCount: reviewedCount || 0,
-        pendingCount: pendingCount,
-      },
+      success: true,
+      message: `成功分配 ${totalAssigned} 名志愿者`,
+      assignedCount: totalAssigned,
     });
   } catch (error) {
-    console.error('获取志愿者详情错误:', error);
-    return ApiErrors.validation('获取志愿者详情失败');
+    console.error('分配志愿者错误:', error);
+    return ApiErrors.validation('分配志愿者失败');
   }
 }
 
-export async function PUT(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const auth = requireAdminOrTeacher(request);
+// 获取学校老师-志愿者分配情况
+export async function GET(request: NextRequest) {
+  const auth = await requireAdminOrTeacher(request);
   if (!auth.authenticated) return authError(auth);
 
   try {
-    const { id } = await params;
-    const body = await request.json();
-    const client = getSupabaseClient();
+    const { searchParams } = new URL(request.url);
+    const schoolId = searchParams.get('schoolId');
+    
+    if (!schoolId) {
+      return ApiErrors.validation('学校ID不能为空');
+    }
+    
+    const client = getSupabaseAdminClient();
 
-    // teacher 角色只能操作自己学校的志愿者
-    if (auth.payload!.role === 'teacher') {
-      const { data: targetVolunteer, error: targetError } = await client
-        .from('users')
-        .select('school_id')
-        .eq('id', id)
-        .eq('role', 'volunteer')
-        .maybeSingle();
-      if (targetError || !targetVolunteer) {
-        return ApiErrors.notFound('志愿者不存在');
-      }
-      if (targetVolunteer.school_id !== auth.payload!.schoolId) {
-        return ApiErrors.forbidden('无权操作其他学校的志愿者');
-      }
-    }
-
-    const updateData: Record<string, any> = {};
-    if (body.name) updateData.name = body.name;
-    if (body.schoolId !== undefined) {
-      updateData.school_id = body.schoolId || null;
-    }
-    if (body.password) {
-      updateData.password = hashPassword(body.password);
-    }
-    // 支持对接老师字段
-    if (body.assignedTeacherId !== undefined) {
-      updateData.assigned_teacher_id = body.assignedTeacherId || null;
-    }
-
-    const { data: volunteer, error } = await client
+    // 获取学校的老师列表
+    const { data: teachers, error: teachersError } = await client
       .from('users')
-      .update(updateData)
-      .eq('id', id)
+      .select('id, username, name, role')
+      .eq('school_id', schoolId)
+      .in('role', ['teacher', 'admin']);
+
+    if (teachersError) {
+      console.error('获取老师列表失败:', teachersError);
+      return supabaseErrorResponse(teachersError, '获取老师列表失败');
+    }
+
+    // 获取老师ID列表
+    const teacherIds = (teachers || []).map(t => t.id);
+
+    // 分开查询，确保逻辑正确：
+    // 1. 未分配到任何学校的志愿者 (school_id is null) - 自由状态
+    const { data: freeVolunteers, error: freeError } = await client
+      .from('users')
+      .select('id, username, name, school_id, assigned_teacher_id')
       .eq('role', 'volunteer')
-      .select()
-      .single();
+      .is('school_id', null)
+      .order('created_at', { ascending: false });
 
-    if (error) {
-      console.error('更新志愿者错误:', error);
-      return supabaseErrorResponse(error, '更新志愿者失败');
-    }
-
-    return NextResponse.json({ success: true, volunteer });
-  } catch (error) {
-    console.error('更新志愿者错误:', error);
-    return ApiErrors.validation('更新志愿者失败');
-  }
-}
-
-export async function DELETE(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const auth = requireAdminOrTeacher(request);
-  if (!auth.authenticated) return authError(auth);
-
-  try {
-    const { id } = await params;
-    const client = getSupabaseClient();
-
-    // teacher 角色只能删除自己学校的志愿者
-    if (auth.payload!.role === 'teacher') {
-      const { data: targetVolunteer, error: targetError } = await client
-        .from('users')
-        .select('school_id')
-        .eq('id', id)
-        .eq('role', 'volunteer')
-        .maybeSingle();
-      if (targetError || !targetVolunteer) {
-        return ApiErrors.notFound('志愿者不存在');
-      }
-      if (targetVolunteer.school_id !== auth.payload!.schoolId) {
-        return ApiErrors.forbidden('无权操作其他学校的志愿者');
-      }
-    }
-
-    const { error } = await client
+    // 2. 已分配到当前学校的志愿者 (school_id = schoolId)
+    const { data: schoolVolunteers, error: schoolError } = await client
       .from('users')
-      .delete()
-      .eq('id', id)
-      .eq('role', 'volunteer');
+      .select('id, username, name, school_id, assigned_teacher_id')
+      .eq('role', 'volunteer')
+      .eq('school_id', schoolId)
+      .order('created_at', { ascending: false });
 
-    if (error) {
-      return supabaseErrorResponse(error, '删除志愿者失败');
+    if (freeError || schoolError) {
+      console.error('获取志愿者列表失败:', freeError || schoolError);
+      return supabaseErrorResponse(freeError || schoolError, '获取志愿者列表失败');
     }
 
-    return NextResponse.json({ success: true });
+    // 合并两个列表
+    const availableVolunteers = [...(freeVolunteers || []), ...(schoolVolunteers || [])];
+
+    // 为每个老师构建志愿者列表
+    const teachersWithVolunteers = (teachers || []).map(teacher => {
+      const assignedVolunteers = availableVolunteers.filter(
+        v => v.assigned_teacher_id === teacher.id
+      );
+      return {
+        ...teacher,
+        volunteers: assignedVolunteers,
+        volunteerCount: assignedVolunteers.length,
+      };
+    });
+
+    // 未分配的志愿者（自由状态 + 当前学校未分配）
+    const unassignedVolunteers = availableVolunteers.filter(
+      v => !v.assigned_teacher_id
+    );
+
+    // 已分配到当前学校的志愿者总数
+    const assignedToSchoolCount = (schoolVolunteers || []).filter(
+      v => v.assigned_teacher_id
+    ).length;
+
+    // 自由状态志愿者数量
+    const freeCount = (freeVolunteers || []).length;
+
+    return NextResponse.json({
+      success: true,
+      teachers: teachersWithVolunteers,
+      availableVolunteers: availableVolunteers,
+      unassignedVolunteers,
+      stats: {
+        totalAvailable: availableVolunteers.length,
+        freeVolunteers: freeCount,
+        assignedToSchool: assignedToSchoolCount,
+        unassigned: unassignedVolunteers.length,
+      }
+    });
   } catch (error) {
-    console.error('删除志愿者错误:', error);
-    return ApiErrors.validation('删除志愿者失败');
+    console.error('获取分配情况错误:', error);
+    return ApiErrors.validation('获取分配情况失败');
   }
 }

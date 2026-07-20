@@ -3,7 +3,7 @@
  * 提供频率限制、IP 白名单、黑名单等功能
  */
 
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import { NextRequest } from 'next/server';
 
 // ========== 频率限制配置 ==========
@@ -18,6 +18,8 @@ export interface RateLimitConfig {
 export const DEFAULT_RATE_LIMITS: Record<string, RateLimitConfig> = {
   // 登录：已放宽限制（原 15 分钟 5 次会阻碍测试），改为 15 分钟 9999 次
   login: { windowMs: 15 * 60 * 1000, maxRequests: 9999, message: '登录尝试过于频繁，请15分钟后再试' },
+  // SEC-005: 注册接口限制 — 每小时最多5次,防止批量注册
+  register: { windowMs: 60 * 60 * 1000, maxRequests: 5, message: '注册请求过于频繁,请1小时后再试' },
   // API：每分钟最多60次
   api: { windowMs: 60 * 1000, maxRequests: 60, message: '请求过于频繁，请稍后再试' },
   // 上传：每小时最多20次
@@ -90,7 +92,7 @@ export async function checkRateLimit(
   const windowStart = now - config.windowMs;
 
   try {
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
 
     // 仅 count 不拉全行，减少网络传输和内存开销
     const { count, error } = await client
@@ -155,7 +157,7 @@ export async function checkAiRateLimit(
  */
 export async function resetRateLimit(identifier: string, type: string): Promise<void> {
   try {
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
     await client
       .from('rate_limit_records')
       .delete()
@@ -171,7 +173,7 @@ export async function resetRateLimit(identifier: string, type: string): Promise<
  */
 export async function cleanupExpiredRateLimitRecords(): Promise<number> {
   try {
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
     const oldestWindow = Math.max(
       ...Object.values(DEFAULT_RATE_LIMITS).map(c => c.windowMs)
     );
@@ -202,7 +204,7 @@ export async function cleanupExpiredRateLimitRecords(): Promise<number> {
  */
 export async function isIPWhitelisted(ip: string): Promise<boolean> {
   try {
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
     const { data, error } = await client
       .from('ip_whitelist')
       .select('id')
@@ -226,7 +228,7 @@ export async function isIPWhitelisted(ip: string): Promise<boolean> {
  */
 export async function isIPBlacklisted(ip: string): Promise<boolean> {
   try {
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
     const { data, error } = await client
       .from('ip_blacklist')
       .select('id')
@@ -254,7 +256,7 @@ export async function addIPToWhitelist(
   addedBy?: string
 ): Promise<void> {
   try {
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
     await client.from('ip_whitelist').insert({
       ip_address: ip,
       note,
@@ -278,7 +280,7 @@ export async function addIPToBlacklist(
   expiryAt?: Date
 ): Promise<void> {
   try {
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
     await client.from('ip_blacklist').insert({
       ip_address: ip,
       reason,
@@ -298,7 +300,7 @@ export async function addIPToBlacklist(
  */
 export async function removeIPFromWhitelist(ip: string): Promise<void> {
   try {
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
     await client
       .from('ip_whitelist')
       .update({ is_active: false })
@@ -314,7 +316,7 @@ export async function removeIPFromWhitelist(ip: string): Promise<void> {
  */
 export async function removeIPFromBlacklist(ip: string): Promise<void> {
   try {
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
     await client
       .from('ip_blacklist')
       .update({ is_active: false })
@@ -340,7 +342,7 @@ export async function logRequest(
   duration?: number
 ): Promise<void> {
   try {
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
     await client.from('request_logs').insert({
       ip_address: ip,
       method,
@@ -367,7 +369,7 @@ export async function detectSuspiciousActivity(ip: string): Promise<{
   const isSuspicious = false;
 
   try {
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
     const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
 
     // 检查短时间内大量请求

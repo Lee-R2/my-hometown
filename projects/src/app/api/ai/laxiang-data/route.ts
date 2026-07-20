@@ -8,7 +8,7 @@ import { getLaxiangData } from '@/lib/laxiang-data';
  */
 
 export async function GET(request: NextRequest) {
-  const auth = requireAdmin(request);
+  const auth = await requireAdmin(request);
   if (!auth.authenticated) return authError(auth);
 
   try {

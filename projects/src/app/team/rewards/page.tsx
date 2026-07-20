@@ -10,6 +10,7 @@ import { ArrowLeft, Trophy, Star, Award, Sparkles, X, Clock, Target, Wrench, Fil
 import { useDataRefresh } from '@/hooks/use-data-refresh';
 import { useScrollPosition } from '@/hooks/use-scroll-position';
 import { useResponsive } from '@/hooks/use-responsive';
+import { safeJSONParse } from '@/lib/utils';
 
 interface Reward {
   id: string;
@@ -109,7 +110,7 @@ export default function RewardsPage() {
       return;
     }
     
-    const team = JSON.parse(teamData);
+    const team = safeJSONParse(teamData, {} as Record<string, any>);
     setTeamPoints(team.points || 0);
     setTeamId(team.id);
   }, [router]);

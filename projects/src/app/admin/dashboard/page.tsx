@@ -279,9 +279,10 @@ export default function AdminDashboard() {
   };
 
   const handleLogout = () => {
-    // 清空蜡象助手对话历史和会话ID，保证退出再进入是新对话
+    // 清空蜡象助手会话ID,保证退出再进入是新对话
+    // LE-M15 修复:此前清理的 laxiang_messages_${user.id} 在 admin-assistant.tsx 中并不存在
+    //(该组件只持久化 session id,不持久化消息历史),属无效清理,已移除
     if (user?.id) {
-      sessionStorage.removeItem(`laxiang_messages_${user.id}`);
       sessionStorage.removeItem(`laxiang_session_${user.id}`);
     }
     localStorage.removeItem('user');

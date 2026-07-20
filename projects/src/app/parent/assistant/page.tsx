@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
+import { safeGetJSON } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -28,12 +29,12 @@ export default function ParentAssistantPage() {
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    const savedParent = localStorage.getItem('parent');
-    if (!savedParent) {
+    const parentData = safeGetJSON<any>('parent', null);
+    if (!parentData) {
       router.push('/parent/login');
       return;
     }
-    setParent(JSON.parse(savedParent));
+    setParent(parentData);
   }, [router]);
 
   // 滚动到底部

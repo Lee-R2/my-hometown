@@ -1,10 +1,10 @@
 import { requireAdminOrVolunteer, authError, safeError } from '@/lib/api-auth';
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import { ApiErrors } from '@/lib/api-error';
 
 export async function POST(request: NextRequest) {
-  const auth = requireAdminOrVolunteer(request);
+  const auth = await requireAdminOrVolunteer(request);
   if (!auth.authenticated) return authError(auth);
 
   try {
@@ -29,7 +29,7 @@ export async function POST(request: NextRequest) {
     const senderId = auth.payload!.userId;
     console.log(`[通知发送] sender: ${senderId}, receiver: ${receiver_id}, type: ${notification_type}`);
 
-    const supabase = getSupabaseClient();
+    const supabase = getSupabaseAdminClient();
 
     const { data, error } = await supabase
       .from('notifications')
@@ -57,7 +57,7 @@ export async function POST(request: NextRequest) {
 }
 
 export async function PUT(request: NextRequest) {
-  const auth = requireAdminOrVolunteer(request);
+  const auth = await requireAdminOrVolunteer(request);
   if (!auth.authenticated) return authError(auth);
 
   try {
@@ -80,7 +80,7 @@ export async function PUT(request: NextRequest) {
       }
     }
 
-    const supabase = getSupabaseClient();
+    const supabase = getSupabaseAdminClient();
 
     const insertData = notifications.map((n: any) => ({
       type: n.notification_type || 'system',

@@ -1,14 +1,13 @@
-import { requireParent, authError, safeError } from '@/lib/api-auth';
+import { requireParent, authError, safeError, getAuthenticatedClient } from '@/lib/api-auth';
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
-
-const supabase = getSupabaseClient();
 
 // 搜索学校
 export async function GET(request: NextRequest) {
   try {
-    const auth = requireParent(request);
+    const auth = await requireParent(request);
     if (!auth.authenticated) return authError(auth);
+
+    const supabase = getAuthenticatedClient(request, auth);
 
     const { searchParams } = new URL(request.url);
     const keyword = searchParams.get('keyword');

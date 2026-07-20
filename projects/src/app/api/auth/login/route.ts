@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import { verifyPasswordAsync, hashPasswordAsync, needsRehash } from '@/lib/security';
 import { createSession, setSessionCookie } from '@/lib/session';
 import { checkRateLimit, logRequest, getClientIP } from '@/lib/rate-limit';
@@ -34,7 +34,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
 
     // 3. 查询用户（直接用 ilike 不区分大小写，省去 eq→ilike 双查询）
     let { data: user, error: userError } = await client
@@ -50,8 +50,9 @@ export async function POST(request: NextRequest) {
         user: user,
       });
       await logRequest(ip, 'POST', '/api/auth/login', userAgent, undefined, 401);
+      // SEC-003: 统一错误消息,防止账号枚举(原本返回"用户名不存在"会暴露用户名是否注册)
       return NextResponse.json(
-        { error: '用户名不存在', field: 'username' },
+        { error: '用户名或密码错误', field: 'username' },
         { status: 401 }
       );
     }
@@ -60,7 +61,8 @@ export async function POST(request: NextRequest) {
     const isPasswordValid = await verifyPasswordAsync(password, user.password);
     if (!isPasswordValid) {
       await logRequest(ip, 'POST', '/api/auth/login', userAgent, user.id, 401);
-      return ApiErrors.unauthorized('密码错误');
+      // SEC-003: 统一错误消息,防止账号枚举
+      return ApiErrors.unauthorized('用户名或密码错误');
     }
 
     // 4.1 若密码哈希为旧 SHA-256 算法，登录成功后自动升级为 bcrypt（fire-and-forget）

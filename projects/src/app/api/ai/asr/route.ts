@@ -12,7 +12,7 @@ import { isPrivateIp, isInternalHost } from '@/lib/security';
  */
 
 export async function POST(request: NextRequest) {
-  const auth = requireAnyAuth(request);
+  const auth = await requireAnyAuth(request);
   if (!auth.authenticated) return authError(auth);
 
   const rateLimit = await checkAiRateLimit(request, auth.payload?.userId, 'ai_asr');

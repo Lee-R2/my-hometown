@@ -1,16 +1,16 @@
 import { requireAdminOrTeacher, authError, safeError } from '@/lib/api-auth';
 import { supabaseErrorResponse, ApiErrors } from '@/lib/api-error';
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 
 // 批量分配志愿者到老师
 export async function POST(request: NextRequest) {
-  const auth = requireAdminOrTeacher(request);
+  const auth = await requireAdminOrTeacher(request);
   if (!auth.authenticated) return authError(auth);
 
   try {
     const body = await request.json();
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
 
     const { schoolId, assignments } = body;
     // assignments 格式: [{ teacherId: string, volunteerIds: string[] }]
@@ -89,7 +89,7 @@ export async function POST(request: NextRequest) {
 
 // 获取学校老师-志愿者分配情况
 export async function GET(request: NextRequest) {
-  const auth = requireAdminOrTeacher(request);
+  const auth = await requireAdminOrTeacher(request);
   if (!auth.authenticated) return authError(auth);
 
   try {
@@ -100,7 +100,7 @@ export async function GET(request: NextRequest) {
       return ApiErrors.validation('学校ID不能为空');
     }
     
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
 
     // 获取学校的老师列表
     const { data: teachers, error: teachersError } = await client

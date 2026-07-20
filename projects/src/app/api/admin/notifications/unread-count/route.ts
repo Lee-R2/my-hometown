@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import { requireAnyAuth, authError } from '@/lib/api-auth';
 import { ApiErrors } from '@/lib/api-error';
 
@@ -9,7 +9,7 @@ import { ApiErrors } from '@/lib/api-error';
  */
 
 export async function GET(request: NextRequest) {
-  const auth = requireAnyAuth(request);
+  const auth = await requireAnyAuth(request);
   if (!auth.authenticated) return authError(auth);
 
   try {
@@ -21,7 +21,7 @@ export async function GET(request: NextRequest) {
       return ApiErrors.validation('缺少用户ID');
     }
 
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
 
     // 查询未读通知数量
     const { count, error } = await client

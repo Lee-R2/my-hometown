@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireTeam, authError, safeError } from '@/lib/api-auth';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import { ApiErrors } from '@/lib/api-error';
 
-const supabase = getSupabaseClient();
+const supabase = getSupabaseAdminClient();
 
 // 获取当前小队的转账记录
 export async function GET(request: NextRequest) {
-  const auth = requireTeam(request);
+  const auth = await requireTeam(request);
   if (!auth.authenticated) return authError(auth);
   const searchParams = request.nextUrl.searchParams;
   const teamId = auth.payload!.userId;

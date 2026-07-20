@@ -1,16 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import { requireAnyAuth, authError, safeError } from '@/lib/api-auth';
 
 export async function GET(request: NextRequest) {
-  const auth = requireAnyAuth(request);
+  const auth = await requireAnyAuth(request);
   if (!auth.authenticated) return authError(auth);
   try {
     // 身份从认证令牌获取，防止客户端伪造角色查看越权数据
     const userId = auth.payload!.userId;
     const userRole = auth.payload!.role;
 
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
 
     // 根据角色获取不同的统计数据
     if (userRole === 'volunteer' && userId) {

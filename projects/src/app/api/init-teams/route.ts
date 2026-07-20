@@ -1,6 +1,6 @@
 import { requireAdmin, authError, safeError } from '@/lib/api-auth';
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import { hashPassword } from '@/lib/security';
 
 /**
@@ -11,10 +11,10 @@ import { hashPassword } from '@/lib/security';
  * 查询所有小队列表
  */
 export async function GET(request: NextRequest) {
-  const auth = requireAdmin(request);
+  const auth = await requireAdmin(request);
   if (!auth.authenticated) return authError(auth);
   try {
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
     const { data: teams, error } = await client
       .from('teams')
       .select('id, code, name, school_id, is_active, created_at')
@@ -46,11 +46,11 @@ export async function GET(request: NextRequest) {
  * 初始化测试小队数据
  */
 export async function POST(request: NextRequest) {
-  const auth = requireAdmin(request);
+  const auth = await requireAdmin(request);
   if (!auth.authenticated) return authError(auth);
 
   try {
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
     const body = await request.json();
     const { force = false } = body;
 

@@ -1,17 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import { requireTeam, authError, safeError } from '@/lib/api-auth';
 import { ApiErrors } from '@/lib/api-error';
 import { verifyPassword, hashPassword, needsRehash } from '@/lib/security';
+import { invalidateAllUserSessions } from '@/lib/session';
 
 export async function POST(request: NextRequest) {
-  const auth = requireTeam(request);
+  const auth = await requireTeam(request);
   if (!auth.authenticated) return authError(auth);
 
   try {
-    const { teamId, oldPassword, newPassword } = await request.json();
+    const { teamId: bodyTeamId, oldPassword, newPassword } = await request.json();
 
-    if (!teamId || !oldPassword || !newPassword) {
+    if (!oldPassword || !newPassword) {
       return ApiErrors.validation('缺少必要参数');
     }
 
@@ -20,7 +21,15 @@ export async function POST(request: NextRequest) {
       return ApiErrors.validation('密码长度需要在4-50个字符之间');
     }
 
-    const client = getSupabaseClient();
+    // 安全:强制使用认证身份作为操作目标,防止越权修改其他小队密码
+    // 请求体中的 teamId 仅作兼容校验,若与登录身份不一致则拒绝
+    const authenticatedTeamId = auth.payload!.userId;
+    if (bodyTeamId && bodyTeamId !== authenticatedTeamId) {
+      return ApiErrors.forbidden('无权修改其他小队的密码');
+    }
+    const teamId = authenticatedTeamId;
+
+    const client = getSupabaseAdminClient();
 
     // 验证旧密码
     const { data: team, error: fetchError } = await client
@@ -54,6 +63,9 @@ export async function POST(request: NextRequest) {
       console.error('更新密码错误:', updateError);
       return ApiErrors.validation('密码更新失败');
     }
+
+    // SEC-008: 密码修改后失效该小队的所有已有会话
+    await invalidateAllUserSessions(teamId);
 
     return NextResponse.json({
       success: true,

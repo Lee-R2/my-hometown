@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import { requireAdminOrVolunteer, authError } from '@/lib/api-auth';
 import { ApiErrors } from '@/lib/api-error';
 
@@ -8,10 +8,10 @@ import { ApiErrors } from '@/lib/api-error';
  * GET /api/admin/feedback?userId=xxx&userRole=xxx&schoolId=xxx
  */
 export async function GET(request: NextRequest) {
-  const auth = requireAdminOrVolunteer(request);
+  const auth = await requireAdminOrVolunteer(request);
   if (!auth.authenticated) return authError(auth);
   try {
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
     const { searchParams } = new URL(request.url);
     const userId = searchParams.get('userId');
     const userRole = searchParams.get('userRole');

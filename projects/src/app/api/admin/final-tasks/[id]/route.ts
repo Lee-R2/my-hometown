@@ -1,153 +1,168 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
-import { requireAdmin, authError, safeError } from '@/lib/api-auth';
-import { supabaseErrorResponse, ApiErrors } from '@/lib/api-error';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
+import { requireAdminOrVolunteer, authError } from '@/lib/api-auth';
+import { ApiErrors } from '@/lib/api-error';
 
-function mapDbToForm(dbRow: any) {
-  return {
-    id: dbRow.id,
-    name: dbRow.title || dbRow.name || '',
-    description: dbRow.description || '',
-    icon: dbRow.icon || '🏆',
-    is_global: dbRow.is_global ?? (dbRow.school_id === null),
-    school_id: dbRow.school_id || null,
-    team_role: dbRow.team_role || dbRow.role || null,
-    form_config: dbRow.form_config || dbRow.fields || [],
-    created_at: dbRow.created_at,
-    updated_at: dbRow.updated_at || dbRow.created_at,
-    is_active: dbRow.is_active ?? true,
-  };
-}
-
-export async function GET(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const auth = requireAdmin(request);
+/**
+ * 获取反馈提交列表
+ * GET /api/admin/feedback?userId=xxx&userRole=xxx&schoolId=xxx
+ */
+export async function GET(request: NextRequest) {
+  const auth = await requireAdminOrVolunteer(request);
   if (!auth.authenticated) return authError(auth);
   try {
-    const client = getSupabaseClient();
-    const { id } = await params;
+    const client = getSupabaseAdminClient();
+    const { searchParams } = new URL(request.url);
+    const userId = searchParams.get('userId');
+    const userRole = searchParams.get('userRole');
+    const schoolId = searchParams.get('schoolId');
+    const formId = searchParams.get('formId');
+    const teamId = searchParams.get('teamId');
 
-    const { data, error } = await client
-      .from('final_task_forms')
-      .select('*')
-      .eq('id', id)
-      .single();
+    if (!userId || !userRole) {
+      return ApiErrors.validation('缺少必要参数');
+    }
+
+    // 先获取小队ID列表（根据角色权限过滤）
+    let teamIds: string[] = [];
+    
+    if (userRole === 'admin' || userRole === 'super_admin') {
+      // 超级管理员可以看到所有反馈
+      const { data: allTeams } = await client
+        .from('teams')
+        .select('id');
+      teamIds = (allTeams || []).map((t: any) => t.id);
+    } else if (userRole === 'teacher' && schoolId) {
+      // 助学老师只能看到本校小队的反馈
+      const { data: schoolTeams } = await client
+        .from('teams')
+        .select('id')
+        .eq('school_id', schoolId);
+      teamIds = (schoolTeams || []).map((t: any) => t.id);
+    } else if (userRole === 'volunteer' && userId) {
+      // 志愿者只能看到自己对接小队的反馈
+      const { data: volunteerTeams } = await client
+        .from('teams')
+        .select('id')
+        .eq('created_by', userId);
+      teamIds = (volunteerTeams || []).map((t: any) => t.id);
+    }
+
+    if (teamIds.length === 0) {
+      return NextResponse.json({ feedbacks: [] });
+    }
+
+    // 构建查询 - 获取反馈提交记录
+    let query = client
+      .from('final_task_submissions')
+      .select(`
+        id,
+        team_id,
+        task_id,
+        member_id,
+        member_role,
+        form_id,
+        form_data,
+        submitted_at,
+        cycle,
+        final_task_forms (
+          id,
+          name,
+          icon,
+          team_role
+        )
+      `)
+      .in('team_id', teamId ? [teamId] : teamIds)
+      .order('submitted_at', { ascending: false });
+
+    // 额外过滤条件
+    if (formId) {
+      query = query.eq('form_id', formId);
+    }
+
+    const { data: feedbacks, error } = await query;
 
     if (error) {
-      console.error('获取最后任务表单失败:', error);
-      return ApiErrors.notFound('表单不存在');
+      console.error('获取反馈列表失败:', error);
+      return ApiErrors.validation('获取失败');
     }
 
-    return NextResponse.json({ 
-      success: true, 
-      form: mapDbToForm(data) 
+    // 获取相关小队、学校、志愿者、助学老师信息
+    const feedbacksWithContext = await Promise.all((feedbacks || []).map(async (feedback: any) => {
+      // 获取小队信息
+      const { data: team } = await client
+        .from('teams')
+        .select('id, name, school_id, teacher_id, created_by')
+        .eq('id', feedback.team_id)
+        .single();
+
+      let schoolName = '';
+      let volunteerName = '';
+      let teacherName = '';
+
+      // 获取学校名称
+      if (team?.school_id) {
+        const { data: school } = await client
+          .from('schools')
+          .select('name')
+          .eq('id', team.school_id)
+          .single();
+        schoolName = school?.name || '';
+      }
+
+      // 获取志愿者名称
+      if (team?.created_by) {
+        const { data: volunteer } = await client
+          .from('users')
+          .select('name')
+          .eq('id', team.created_by)
+          .single();
+        volunteerName = volunteer?.name || '';
+      }
+
+      // 获取助学老师名称
+      if (team?.teacher_id) {
+        const { data: teacher } = await client
+          .from('users')
+          .select('name')
+          .eq('id', team.teacher_id)
+          .single();
+        teacherName = teacher?.name || '';
+      }
+
+      // 获取成员名称
+      const { data: member } = await client
+        .from('team_members')
+        .select('name')
+        .eq('id', feedback.member_id)
+        .single();
+
+      return {
+        id: feedback.id,
+        teamId: feedback.team_id,
+        teamName: team?.name || '',
+        schoolName,
+        volunteerName,
+        teacherName,
+        taskId: feedback.task_id,
+        memberId: feedback.member_id,
+        memberName: member?.name || '',
+        memberRole: feedback.member_role,
+        formId: feedback.form_id,
+        formName: (feedback.final_task_forms as any)?.name || '',
+        formIcon: (feedback.final_task_forms as any)?.icon || '',
+        formData: feedback.form_data,
+        submittedAt: feedback.submitted_at,
+        cycle: feedback.cycle || 1,
+      };
+    }));
+
+    return NextResponse.json({
+      success: true,
+      feedbacks: feedbacksWithContext,
     });
   } catch (error) {
-    console.error('获取最后任务表单错误:', error);
-    return safeError(error);
-  }
-}
-
-export async function PUT(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const auth = requireAdmin(request);
-  if (!auth.authenticated) return authError(auth);
-  try {
-    const client = getSupabaseClient();
-    const { id } = await params;
-    const body = await request.json();
-
-    const { role: userRole } = body;
-
-    // 权限验证：只有超级管理员可以更新最后任务表单
-    if (userRole !== 'admin' && userRole !== 'super_admin') {
-      return ApiErrors.forbidden('只有超级管理员可以更新最后任务表单');
-    }
-
-    const updateData: Record<string, any> = {};
-
-    if (body.name !== undefined) updateData.title = body.name;
-    if (body.description !== undefined) updateData.description = body.description;
-    if (body.isGlobal !== undefined) {
-      updateData.school_id = body.isGlobal ? null : (body.schoolId || null);
-    }
-    if (body.formConfig !== undefined) updateData.fields = body.formConfig;
-    if (body.teamRole !== undefined) updateData.role = body.teamRole || null;
-
-    const { data, error } = await client
-      .from('final_task_forms')
-      .update(updateData)
-      .eq('id', id)
-      .select()
-      .single();
-
-    if (error) {
-      console.error('更新最后任务表单失败:', error);
-      return supabaseErrorResponse(error, '更新最后任务表单失败');
-    }
-
-    return NextResponse.json({ 
-      success: true, 
-      form: mapDbToForm(data),
-      message: '更新成功' 
-    });
-  } catch (error) {
-    console.error('更新最后任务表单错误:', error);
-    return safeError(error);
-  }
-}
-
-export async function DELETE(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const auth = requireAdmin(request);
-  if (!auth.authenticated) return authError(auth);
-  try {
-    const client = getSupabaseClient();
-    const { id } = await params;
-
-    // 从请求头获取角色信息
-    const role = request.headers.get('x-user-role');
-
-    // 权限验证：只有超级管理员可以删除最后任务表单
-    if (role !== 'admin' && role !== 'super_admin') {
-      return ApiErrors.forbidden('只有超级管理员可以删除最后任务表单');
-    }
-
-    // 检查是否被主题引用
-    const { count } = await client
-      .from('themes')
-      .select('id', { count: 'exact', head: true })
-      .eq('final_task_form_id', id);
-
-    if (count && count > 0) {
-      return NextResponse.json({ 
-        error: `该表单已被 ${count} 个主题引用，无法删除` 
-      }, { status: 400 });
-    }
-
-    // 硬删除（DB没有is_active列）
-    const { error } = await client
-      .from('final_task_forms')
-      .delete()
-      .eq('id', id);
-
-    if (error) {
-      console.error('删除最后任务表单失败:', error);
-      return ApiErrors.validation('删除失败');
-    }
-
-    return NextResponse.json({ 
-      success: true, 
-      message: '删除成功' 
-    });
-  } catch (error) {
-    console.error('删除最后任务表单错误:', error);
-    return ApiErrors.validation('删除最后任务表单失败');
+    console.error('获取反馈列表错误:', error);
+    return ApiErrors.validation('获取反馈列表失败');
   }
 }

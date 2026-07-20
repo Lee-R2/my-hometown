@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import { requireAdminOrVolunteer, authError, safeError } from '@/lib/api-auth';
 import { ApiErrors } from '@/lib/api-error';
 
 export async function GET(request: NextRequest) {
-  const auth = requireAdminOrVolunteer(request);
+  const auth = await requireAdminOrVolunteer(request);
   if (!auth.authenticated) return authError(auth);
   try {
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
     const { searchParams } = new URL(request.url);
     const volunteerId = searchParams.get('volunteerId');
 

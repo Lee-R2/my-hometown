@@ -5,7 +5,7 @@
  * 使用 Supabase 数据库确保数据持久化和跨会话共享。
  */
 
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import type { LearningCategory, LearningArea, LearningStatus, ReflectionEntry } from './reflection-engine';
 
 // ========== 数据库初始化 ==========
@@ -16,7 +16,7 @@ import type { LearningCategory, LearningArea, LearningStatus, ReflectionEntry } 
  * 此函数仅做简单检查，不再尝试通过 RPC 创建表
  */
 export async function ensureReflectionTable(): Promise<boolean> {
-  const supabase = getSupabaseClient();
+  const supabase = getSupabaseAdminClient();
   
   // 简单检查表是否存在
   const { error } = await supabase
@@ -38,7 +38,7 @@ export async function ensureReflectionTable(): Promise<boolean> {
  * 保存自省条目
  */
 export async function saveReflection(entry: ReflectionEntry): Promise<string | null> {
-  const supabase = getSupabaseClient();
+  const supabase = getSupabaseAdminClient();
   
   const { data, error } = await supabase
     .from('agent_reflections')
@@ -71,7 +71,7 @@ export async function saveReflection(entry: ReflectionEntry): Promise<string | n
  * 批量保存自省条目
  */
 export async function saveReflections(entries: ReflectionEntry[]): Promise<number> {
-  const supabase = getSupabaseClient();
+  const supabase = getSupabaseAdminClient();
   
   const rows = entries.map(entry => ({
     agent_id: entry.agent_id,
@@ -113,7 +113,7 @@ export async function getReflections(
     since?: string;  // ISO date
   }
 ): Promise<ReflectionEntry[]> {
-  const supabase = getSupabaseClient();
+  const supabase = getSupabaseAdminClient();
   
   let query = supabase
     .from('agent_reflections')
@@ -145,7 +145,7 @@ export async function updateReflectionStatus(
   status: LearningStatus,
   correction?: string
 ): Promise<boolean> {
-  const supabase = getSupabaseClient();
+  const supabase = getSupabaseAdminClient();
   
   const updates: Record<string, unknown> = { 
     status,
@@ -169,7 +169,7 @@ export async function resolveByPattern(
   area: LearningArea,
   learningKeyword: string
 ): Promise<number> {
-  const supabase = getSupabaseClient();
+  const supabase = getSupabaseAdminClient();
   
   const { data, error } = await supabase
     .from('agent_reflections')
@@ -191,7 +191,7 @@ export async function resolveByPattern(
  * 执行统计查询 SQL（通过 exec_safe_sql RPC）
  */
 export async function executeStatsQuery(sql: string): Promise<Record<string, unknown>[]> {
-  const supabase = getSupabaseClient();
+  const supabase = getSupabaseAdminClient();
   
   const { data, error } = await supabase.rpc('exec_safe_sql', { query_text: sql });
   

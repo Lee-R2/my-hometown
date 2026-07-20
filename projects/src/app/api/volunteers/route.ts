@@ -1,11 +1,11 @@
 import { requireAnyAuth, requireAdminOrTeacher, authError, safeError } from '@/lib/api-auth';
 import { supabaseErrorResponse, ApiErrors } from '@/lib/api-error';
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import { hashPassword } from '@/lib/security';
 
 export async function GET(request: NextRequest) {
-  const auth = requireAnyAuth(request);
+  const auth = await requireAnyAuth(request);
   if (!auth.authenticated) return authError(auth);
 
   try {
@@ -19,7 +19,7 @@ export async function GET(request: NextRequest) {
     const userRole = auth.payload!.role;
     const authSchoolId = auth.payload!.schoolId;
 
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
 
     let query = client
       .from('users')
@@ -143,12 +143,12 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const auth = requireAdminOrTeacher(request);
+  const auth = await requireAdminOrTeacher(request);
   if (!auth.authenticated) return authError(auth);
 
   try {
     const body = await request.json();
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
 
     const { username, name } = body;
 
@@ -206,13 +206,13 @@ export async function POST(request: NextRequest) {
 }
 
 export async function PUT(request: NextRequest) {
-  const auth = requireAdminOrTeacher(request);
+  const auth = await requireAdminOrTeacher(request);
   if (!auth.authenticated) return authError(auth);
 
   try {
     const body = await request.json();
     const { volunteers } = body;
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
 
     if (!volunteers || !Array.isArray(volunteers) || volunteers.length === 0) {
       return ApiErrors.validation('请提供有效的导入数据');

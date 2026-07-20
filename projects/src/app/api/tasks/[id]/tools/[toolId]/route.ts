@@ -1,49 +1,70 @@
-import { requireAdminOrVolunteer, authError } from '@/lib/api-auth';
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
-import { supabaseErrorResponse, ApiErrors } from '@/lib/api-error';
+import { requireAnyAuth, authError } from '@/lib/api-auth';
 
-// 更新任务工具的必选/可选状态
-export async function PUT(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string; toolId: string }> }
-) {
-  const auth = requireAdminOrVolunteer(request);
+/**
+ * 数据同步状态接口
+ * 当前为 stub 实现：返回空状态，表示无更新
+ * 后续可扩展为基于 lastSync 时间戳查询各表变更数量
+ */
+
+export async function GET(request: NextRequest) {
+  // 安全:必须认证后才能查询同步状态,防止未授权用户枚举 teamId/userId 是否存在
+  const auth = await requireAnyAuth(request);
   if (!auth.authenticated) return authError(auth);
 
-  try {
-    const { id, toolId } = await params;
-    const body = await request.json();
-    const client = getSupabaseClient();
+  const { searchParams } = new URL(request.url);
+  const teamId = searchParams.get('teamId');
+  const userId = searchParams.get('userId');
+  const userRole = searchParams.get('userRole');
+  const lastSync = searchParams.get('lastSync');
 
-    const updateData: Record<string, any> = {};
-    if (body.isRequired !== undefined) updateData.is_required = body.isRequired;
-
-    const { data: taskTool, error } = await client
-      .from('task_tools')
-      .update(updateData)
-      .eq('task_id', id)
-      .eq('tool_id', toolId)
-      .select(`
-        id,
-        is_required,
-        tools (
-          id,
-          name,
-          description,
-          icon,
-          category
-        )
-      `)
-      .single();
-
-    if (error) {
-      return supabaseErrorResponse(error, '更新失败');
-    }
-
-    return NextResponse.json({ success: true, taskTool });
-  } catch (error) {
-    console.error('更新任务工具错误:', error);
-    return ApiErrors.validation('更新失败');
+  // 基础校验（兼容团队端与管理员端两种调用方式）
+  if (!teamId && !userId) {
+    return NextResponse.json(
+      { success: false, error: '缺少 teamId 或 userId 参数' },
+      { status: 400 }
+    );
   }
+
+  // 安全:校验查询参数与认证身份一致,防止枚举其他用户/小队
+  // admin/super_admin 可能查询任意小队/用户(管理后台用),其他角色只能查自己
+  const authRole = auth.payload!.role;
+  const authUserId = auth.payload!.userId;
+  if (authRole !== 'super_admin' && authRole !== 'admin') {
+    if (teamId && teamId !== authUserId) {
+      return NextResponse.json(
+        { success: false, error: '无权查询其他小队的同步状态' },
+        { status: 403 }
+      );
+    }
+    if (userId && userId !== authUserId) {
+      return NextResponse.json(
+        { success: false, error: '无权查询其他用户的同步状态' },
+        { status: 403 }
+      );
+    }
+  }
+
+  // stub：返回空状态，表示当前无更新
+  // 真正的同步逻辑可基于 lastSync 时间戳查询各表 updated_at > lastSync 的记录数
+  return NextResponse.json({
+    success: true,
+    hasUpdates: false,
+    changes: [],
+    status: {
+      teams: 0,
+      tasks: 0,
+      submissions: 0,
+      rewards: 0,
+      skills: 0,
+      tools: 0,
+      messages: 0,
+      members: 0,
+      user_rewards: 0,
+      task_themes: 0,
+      team_side_tasks: 0,
+      permissions: 0,
+    },
+    serverTime: Date.now(),
+  });
 }

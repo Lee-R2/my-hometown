@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { authenticateRequest, authError, safeError } from '@/lib/api-auth';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import { resolveTeamScope } from '@/lib/agent-scope';
 
-const supabase = getSupabaseClient();
+const supabase = getSupabaseAdminClient();
 
 export async function GET(request: NextRequest) {
-  const auth = authenticateRequest(request, {
+  const auth = await authenticateRequest(request, {
     requiredRoles: ['super_admin', 'admin', 'volunteer', 'teacher'],
   });
   if (!auth.authenticated) return authError(auth);

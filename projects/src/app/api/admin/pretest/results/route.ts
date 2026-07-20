@@ -111,8 +111,8 @@ function getWeakDimensionSuggestions(dimA: number, dimB: number, dimC: number, d
 // GET: 获取所有小队的AI素养评估结果（管理员/志愿者/老师可用）
 export async function GET(request: NextRequest) {
   // 允许 super_admin, admin, volunteer, teacher 访问
-  const authAdmin = requireAdminOrVolunteer(request);
-  const authTeacher = requireAdminOrTeacher(request);
+  const authAdmin = await requireAdminOrVolunteer(request);
+  const authTeacher = await requireAdminOrTeacher(request);
   
   if (!authAdmin.authenticated && !authTeacher.authenticated) {
     return authError(authAdmin);

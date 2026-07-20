@@ -7,7 +7,7 @@ import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 const supabaseAdmin = getSupabaseAdminClient();
 
 export async function GET(request: NextRequest) {
-  const auth = requireTeam(request);
+  const auth = await requireTeam(request);
   if (!auth.authenticated) return authError(auth);
   try {
     // 强制使用认证令牌中的 userId，防止横向越权
@@ -97,7 +97,7 @@ export async function GET(request: NextRequest) {
 
 // 提交前测问卷回答
 export async function POST(request: NextRequest) {
-  const auth = requireTeam(request);
+  const auth = await requireTeam(request);
   if (!auth.authenticated) return authError(auth);
   try {
     const body = await request.json();

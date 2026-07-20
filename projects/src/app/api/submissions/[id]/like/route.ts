@@ -1,11 +1,11 @@
 import { requireAnyAuth, authError, safeError } from '@/lib/api-auth';
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
-import { 
-  LIKE_POINTS, 
-  LIKER_POINTS, 
-  MAX_LIKES_PER_STAGE, 
-  FRAGMENTS_PER_GEM 
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
+import {
+  LIKE_POINTS,
+  LIKER_POINTS,
+  MAX_LIKES_PER_STAGE,
+  FRAGMENTS_PER_GEM
 } from '@/lib/constants';
 import { supabaseErrorResponse, ApiErrors } from '@/lib/api-error';
 
@@ -18,7 +18,7 @@ import { supabaseErrorResponse, ApiErrors } from '@/lib/api-error';
  * @returns 返回更新后的统计信息
  */
 async function updateHeartGems(
-  client: ReturnType<typeof getSupabaseClient>,
+  client: ReturnType<typeof getSupabaseAdminClient>,
   teamId: string,
   deltaLikes: number
 ): Promise<{
@@ -28,7 +28,15 @@ async function updateHeartGems(
   totalSentLikes: number;
   shardsEarned: number;
 }> {
-  const MAX_RETRIES = 3;
+  // 安全修复 LE-P02: 之前乐观锁只校验 heart_gems(整数),不校验 heart_shards(浮点),
+  // 注释说"浮点数不作为锁条件"。但两个并发点赞都读到相同 heart_gems,都通过乐观锁,
+  // 各自计算后写入 heart_shards,后写覆盖前写,导致碎片丢失。
+  //
+  // 修复方案:把 heart_shards 也加入乐观锁条件。虽然浮点 .eq() 比较不如整数精确,
+  // 但在本场景中 heart_shards 只有 0.1 的倍数(每 3 个点赞得 0.1),PostgreSQL 的
+  // numeric 类型可以精确比较。任何一方被并发修改都能检测到并重试。
+  // 同时把重试次数从 3 提升到 5,进一步降低冲突概率。
+  const MAX_RETRIES = 5;
   let lastError: any = null;
 
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
@@ -97,7 +105,9 @@ async function updateHeartGems(
     // 四舍五入保留2位小数
     currentFragments = Math.round(currentFragments * 100) / 100;
 
-    // 更新 teams 表（乐观锁：校验 heart_gems 未被并发修改，heart_shards 为浮点数不作为锁条件）
+    // 更新 teams 表(乐观锁:同时校验 heart_gems 和 heart_shards 未被并发修改)
+    // LE-P02 修复:之前只校验 heart_gems,现在 heart_shards 也加入乐观锁条件,
+    // 任何一方被并发修改都会导致 0 行更新,触发重试。
     const { data: updated, error: updateError } = await client
       .from('teams')
       .update({
@@ -107,6 +117,7 @@ async function updateHeartGems(
       })
       .eq('id', teamId)
       .eq('heart_gems', currentGems)
+      .eq('heart_shards', teamData?.heart_shards ?? 0)
       .select('id');
 
     if (updateError) {
@@ -116,8 +127,8 @@ async function updateHeartGems(
     }
 
     if (!updated || updated.length === 0) {
-      // 乐观锁冲突：heart_gems 已被并发修改，重试
-      lastError = new Error('乐观锁冲突，heart_gems 已被并发修改');
+      // 乐观锁冲突：heart_gems 或 heart_shards 已被并发修改，重试
+      lastError = new Error('乐观锁冲突，heart_gems 或 heart_shards 已被并发修改');
       continue;
     }
 
@@ -149,17 +160,47 @@ async function updateHeartGems(
 }
 
 /**
+ * 安全修复 LE-P03: 校验 teams 积分 update 的乐观锁结果。
+ * 之前 4 处 update 都不检查返回值,并发触发时可能多次加减积分。
+ * 现在统一封装:返回 true 表示成功,false 表示乐观锁冲突(0 行更新)。
+ */
+async function updateTeamPoints(
+  client: ReturnType<typeof getSupabaseAdminClient>,
+  teamId: string,
+  newPoints: number,
+  expectedPoints: number
+): Promise<boolean> {
+  const { data, error } = await client
+    .from('teams')
+    .update({
+      points: newPoints,
+      updated_at: new Date().toISOString()
+    })
+    .eq('id', teamId)
+    .eq('points', expectedPoints)
+    .select('id');
+  if (error) {
+    console.error('[updateTeamPoints] 数据库错误:', error);
+    return false;
+  }
+  return !!(data && data.length > 0);
+}
+
+/**
  * 点赞/取消点赞 任务提交
  * 每获得1个爱心，被点赞的小队加5积分
  * 每送出1个爱心，点赞的小队获得1个爱心宝石碎片和1积分
  * 10个爱心宝石碎片合成1颗爱心宝石
  * 每个小队在同一个任务阶段内最多可为归属于不同小队的三个不同的任务产出点赞
+ *
+ * 安全修复 LE-P03: 所有 teams 积分 update 必须检查乐观锁结果,
+ * 任一更新失败时回滚已执行操作,防止并发刷取积分。
  */
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const auth = requireAnyAuth(request);
+  const auth = await requireAnyAuth(request);
   if (!auth.authenticated) return authError(auth);
 
   try {
@@ -199,7 +240,7 @@ export async function POST(
       operatorId: authUserId,
     });
 
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
 
     // 验证提交记录是否存在
     const { data: submission, error: submissionError } = await client
@@ -237,7 +278,7 @@ export async function POST(
         return supabaseErrorResponse(deleteError, '取消点赞失败');
       }
 
-      // 给被点赞的小队减积分（乐观锁）
+      // 给被点赞的小队减积分（乐观锁 + 结果校验）
       const { data: toTeamData } = await client
         .from('teams')
         .select('points')
@@ -247,16 +288,24 @@ export async function POST(
       const toTeamPoints = toTeamData?.points || 0;
       const newToTeamPoints = Math.max(0, toTeamPoints - LIKE_POINTS);
 
-      await client
-        .from('teams')
-        .update({
-          points: newToTeamPoints,
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', toTeamId)
-        .eq('points', toTeamPoints);
+      // 安全修复 LE-P03: 校验减积分结果,失败时回滚 likes 删除(重新插入)
+      const toDeductOk = await updateTeamPoints(client, toTeamId, newToTeamPoints, toTeamPoints);
+      if (!toDeductOk) {
+        // 回滚:重新插入被删除的 likes 记录
+        await client.from('likes').insert({
+          id: existingLike.id,
+          submission_id: submissionId,
+          team_id: fromTeamId,
+          to_team_id: toTeamId,
+          stage: stage,
+        });
+        return NextResponse.json(
+          { success: false, error: '操作冲突，请重试' },
+          { status: 409 }
+        );
+      }
 
-      // 给点赞的小队减积分（乐观锁）
+      // 给点赞的小队减积分（乐观锁 + 结果校验）
       const { data: fromTeamData } = await client
         .from('teams')
         .select('points')
@@ -266,17 +315,62 @@ export async function POST(
       const fromTeamPoints = fromTeamData?.points || 0;
       const newFromTeamPoints = Math.max(0, fromTeamPoints - LIKER_POINTS);
 
-      await client
-        .from('teams')
-        .update({
-          points: newFromTeamPoints,
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', fromTeamId)
-        .eq('points', fromTeamPoints);
+      const fromDeductOk = await updateTeamPoints(client, fromTeamId, newFromTeamPoints, fromTeamPoints);
+      if (!fromDeductOk) {
+        // 回滚:把 toTeam 减掉的积分加回去,并重新插入 likes 记录
+        await updateTeamPoints(client, toTeamId, toTeamPoints, newToTeamPoints);
+        await client.from('likes').insert({
+          id: existingLike.id,
+          submission_id: submissionId,
+          team_id: fromTeamId,
+          to_team_id: toTeamId,
+          stage: stage,
+        });
+        return NextResponse.json(
+          { success: false, error: '操作冲突，请重试' },
+          { status: 409 }
+        );
+      }
 
-      // 更新爱心宝石碎片（减少）
-      const heartGemResult = await updateHeartGems(client, fromTeamId, -1);
+      // 更新爱心宝石碎片（减少）— updateHeartGems 内部已带 3 次重试,失败会抛错
+      let heartGemResult;
+      try {
+        heartGemResult = await updateHeartGems(client, fromTeamId, -1);
+      } catch (e) {
+        // 碎片更新失败,回滚双方积分变更并恢复 likes 记录
+        await updateTeamPoints(client, toTeamId, toTeamPoints, newToTeamPoints);
+        await updateTeamPoints(client, fromTeamId, fromTeamPoints, newFromTeamPoints);
+        await client.from('likes').insert({
+          id: existingLike.id,
+          submission_id: submissionId,
+          team_id: fromTeamId,
+          to_team_id: toTeamId,
+          stage: stage,
+        });
+        console.error('[取消点赞] updateHeartGems 失败,已回滚:', e);
+        return NextResponse.json(
+          { success: false, error: '碎片更新冲突，请重试' },
+          { status: 409 }
+        );
+      }
+
+      // LE-P20: 写入 point_transactions 审计记录(取消点赞场景)
+      const { error: unlikeToTxErr } = await client.from('point_transactions').insert({
+        team_id: toTeamId,
+        points: -LIKE_POINTS,
+        change_type: 'unlike_received',
+        related_id: submissionId,
+        description: `取消点赞扣除 ${LIKE_POINTS} 积分（点赞方: ${fromTeamId}）`,
+      });
+      if (unlikeToTxErr) console.error('[取消点赞] 写入被点赞方审计记录失败:', unlikeToTxErr);
+      const { error: unlikeFromTxErr } = await client.from('point_transactions').insert({
+        team_id: fromTeamId,
+        points: -LIKER_POINTS,
+        change_type: 'unlike_sent',
+        related_id: submissionId,
+        description: `取消点赞扣除 ${LIKER_POINTS} 积分（取消对 ${toTeamId} 的点赞）`,
+      });
+      if (unlikeFromTxErr) console.error('[取消点赞] 写入点赞方审计记录失败:', unlikeFromTxErr);
 
       // 构建返回消息
       let message = '已取消点赞';
@@ -284,8 +378,8 @@ export async function POST(
         message = `已取消点赞，1颗爱心宝石拆分为碎片`;
       }
 
-      return NextResponse.json({ 
-        success: true, 
+      return NextResponse.json({
+        success: true,
         liked: false,
         message,
         heartGems: {
@@ -321,7 +415,7 @@ export async function POST(
         return supabaseErrorResponse(insertError, '点赞失败');
       }
 
-      // 给被点赞的小队加积分（乐观锁）
+      // 给被点赞的小队加积分（乐观锁 + 结果校验）
       const { data: toTeamData } = await client
         .from('teams')
         .select('points')
@@ -330,16 +424,21 @@ export async function POST(
 
       const toTeamPoints = toTeamData?.points || 0;
 
-      await client
-        .from('teams')
-        .update({
-          points: toTeamPoints + LIKE_POINTS,
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', toTeamId)
-        .eq('points', toTeamPoints);
+      // 安全修复 LE-P03: 校验加积分结果,失败时回滚 likes insert
+      const toCreditOk = await updateTeamPoints(client, toTeamId, toTeamPoints + LIKE_POINTS, toTeamPoints);
+      if (!toCreditOk) {
+        // 回滚:删除刚插入的 likes 记录
+        await client.from('likes')
+          .delete()
+          .eq('submission_id', submissionId)
+          .eq('team_id', fromTeamId);
+        return NextResponse.json(
+          { success: false, error: '操作冲突，请重试' },
+          { status: 409 }
+        );
+      }
 
-      // 给点赞的小队加积分（乐观锁）
+      // 给点赞的小队加积分（乐观锁 + 结果校验）
       const { data: fromTeamData } = await client
         .from('teams')
         .select('points')
@@ -348,17 +447,56 @@ export async function POST(
 
       const fromTeamPoints = fromTeamData?.points || 0;
 
-      await client
-        .from('teams')
-        .update({
-          points: fromTeamPoints + LIKER_POINTS,
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', fromTeamId)
-        .eq('points', fromTeamPoints);
+      const fromCreditOk = await updateTeamPoints(client, fromTeamId, fromTeamPoints + LIKER_POINTS, fromTeamPoints);
+      if (!fromCreditOk) {
+        // 回滚:把 toTeam 加的积分减回去,并删除 likes 记录
+        await updateTeamPoints(client, toTeamId, toTeamPoints, toTeamPoints + LIKE_POINTS);
+        await client.from('likes')
+          .delete()
+          .eq('submission_id', submissionId)
+          .eq('team_id', fromTeamId);
+        return NextResponse.json(
+          { success: false, error: '操作冲突，请重试' },
+          { status: 409 }
+        );
+      }
 
       // 更新爱心宝石碎片（增加），并检查是否合成宝石
-      const heartGemResult = await updateHeartGems(client, fromTeamId, 1);
+      let heartGemResult;
+      try {
+        heartGemResult = await updateHeartGems(client, fromTeamId, 1);
+      } catch (e) {
+        // 碎片更新失败,回滚双方积分变更并删除 likes 记录
+        await updateTeamPoints(client, toTeamId, toTeamPoints, toTeamPoints + LIKE_POINTS);
+        await updateTeamPoints(client, fromTeamId, fromTeamPoints, fromTeamPoints + LIKER_POINTS);
+        await client.from('likes')
+          .delete()
+          .eq('submission_id', submissionId)
+          .eq('team_id', fromTeamId);
+        console.error('[点赞] updateHeartGems 失败,已回滚:', e);
+        return NextResponse.json(
+          { success: false, error: '碎片更新冲突，请重试' },
+          { status: 409 }
+        );
+      }
+
+      // LE-P20: 写入 point_transactions 审计记录(点赞场景)
+      const { error: likeToTxErr } = await client.from('point_transactions').insert({
+        team_id: toTeamId,
+        points: LIKE_POINTS,
+        change_type: 'like_received',
+        related_id: submissionId,
+        description: `被点赞获得 ${LIKE_POINTS} 积分（点赞方: ${fromTeamId}）`,
+      });
+      if (likeToTxErr) console.error('[点赞] 写入被点赞方审计记录失败:', likeToTxErr);
+      const { error: likeFromTxErr } = await client.from('point_transactions').insert({
+        team_id: fromTeamId,
+        points: LIKER_POINTS,
+        change_type: 'like_sent',
+        related_id: submissionId,
+        description: `点赞获得 ${LIKER_POINTS} 积分（被点赞方: ${toTeamId}）`,
+      });
+      if (likeFromTxErr) console.error('[点赞] 写入点赞方审计记录失败:', likeFromTxErr);
 
       // 构建返回消息
       let message = '点赞成功！';
@@ -368,8 +506,8 @@ export async function POST(
         message = `点赞成功！获得${heartGemResult.shardsEarned}个爱心宝石碎片💝（${heartGemResult.totalFragments}/10）`;
       }
 
-      return NextResponse.json({ 
-        success: true, 
+      return NextResponse.json({
+        success: true,
         liked: true,
         message,
         heartGems: {
@@ -387,17 +525,22 @@ export async function POST(
 
 /**
  * 获取提交记录的点赞状态和数量
+ * LE-A08: 添加 requireAnyAuth 鉴权,防止未认证用户批量爬取点赞数据
  */
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  // LE-A08: 原 GET handler 完全无鉴权,任意未认证用户可查询任意 submissionId 的点赞状态
+  const auth = await requireAnyAuth(request);
+  if (!auth.authenticated) return authError(auth);
+
   try {
     const { id: submissionId } = await params;
     const { searchParams } = new URL(request.url);
     const fromTeamId = searchParams.get('fromTeamId');
 
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
 
     // 获取点赞总数
     const { count, error: countError } = await client

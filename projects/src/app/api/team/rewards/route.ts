@@ -1,11 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireTeam, authError, safeError } from '@/lib/api-auth';
+import { requireTeam, authError, safeError, getAuthenticatedClient } from '@/lib/api-auth';
 import { supabaseErrorResponse, ApiErrors } from '@/lib/api-error';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
 import { LIKE_POINTS, REWARD_TYPE_LABELS } from '@/lib/constants';
 
 // 获取小队赠送积分总数（transfer_out 的绝对值之和）
-async function getTotalTransferredPoints(client: ReturnType<typeof getSupabaseClient>, teamId: string): Promise<number> {
+async function getTotalTransferredPoints(client: ReturnType<typeof getAuthenticatedClient>, teamId: string): Promise<number> {
   const { data } = await client
     .from('point_transactions')
     .select('points')
@@ -16,7 +15,7 @@ async function getTotalTransferredPoints(client: ReturnType<typeof getSupabaseCl
 }
 
 export async function GET(request: NextRequest) {
-  const auth = requireTeam(request);
+  const auth = await requireTeam(request);
   if (!auth.authenticated) return authError(auth);
   try {
     // 强制使用认证令牌中的 userId，防止横向越权
@@ -26,7 +25,7 @@ export async function GET(request: NextRequest) {
       return ApiErrors.validation('认证令牌无效');
     }
 
-    const client = getSupabaseClient();
+    const client = getAuthenticatedClient(request, auth);
 
     // 获取小队当前的 theme_id，用于过滤当前轮次的数据
     const { data: team } = await client

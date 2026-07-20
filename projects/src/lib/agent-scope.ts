@@ -1,4 +1,4 @@
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 
 /**
  * 跨智能体数据交流 - 角色-团队范围解析模块
@@ -23,7 +23,7 @@ export async function resolveTeamScope(
   userId: string,
   userRole: string
 ): Promise<TeamScope> {
-  const client = getSupabaseClient();
+  const client = getSupabaseAdminClient();
   const teamNames = new Map<string, string>();
 
   try {

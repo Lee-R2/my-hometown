@@ -36,7 +36,7 @@ const ALLOWED_AGENTS: Record<string, { username: string; role: string }> = {
 };
 
 export async function POST(request: NextRequest) {
-  const auth = requireAnyAuth(request);
+  const auth = await requireAnyAuth(request);
   if (!auth.authenticated) return authError(auth);
 
   // 频率限制：每分钟最多20次AI请求
@@ -156,7 +156,9 @@ export async function POST(request: NextRequest) {
     }
 
     // 合并上下文：意图提示 + 上下文提示 + 记忆 + 实时数据
-    const contexts = [intentHint, contextPrompt, relevantMemories, dataContext].filter(Boolean);
+    // LE-M13: 记忆内容用 <agent_memory> 标签包裹,与数据上下文区分
+    const wrappedMemories = relevantMemories ? `<agent_memory>\n${relevantMemories}\n</agent_memory>` : '';
+    const contexts = [intentHint, contextPrompt, wrappedMemories, dataContext].filter(Boolean);
     const finalContext = contexts.join('\n\n');
 
     // 构建系统提示词（使用模块化函数）

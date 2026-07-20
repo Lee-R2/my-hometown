@@ -1,155 +1,101 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import { requireAdmin, authError, safeError } from '@/lib/api-auth';
-import { supabaseErrorResponse, ApiErrors } from '@/lib/api-error';
+import { ApiErrors } from '@/lib/api-error';
+import { maskPhone } from '@/lib/security';
 
-// 使用服务角色密钥直接访问数据库，绕过RLS（未配置时自动回退到 anon key）
-const supabaseAdmin = getSupabaseAdminClient();
+const supabase = getSupabaseAdminClient();
 
-export async function GET(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const auth = requireAdmin(request);
+// 获取待审核家长列表
+export async function GET(request: NextRequest) {
+  const auth = await requireAdmin(request);
   if (!auth.authenticated) return authError(auth);
   try {
-    const { id } = await params;
-    
-    const { data: question, error } = await supabaseAdmin
-      .from('pretest_questions')
-      .select('*')
-      .eq('id', id)
-      .single();
+    const { searchParams } = new URL(request.url);
+    const status = searchParams.get('status') || 'pending';
+    const schoolId = searchParams.get('schoolId');
 
-    if (error || !question) {
-      return ApiErrors.notFound('题目不存在');
+    let query = supabase
+      .from('parents')
+      .select(`
+        id,
+        phone,
+        name,
+        school_id,
+        school_name,
+        status,
+        created_at,
+        reviewed_by,
+        reviewed_at,
+        review_remark
+      `)
+      .eq('status', status)
+      .order('created_at', { ascending: false });
+
+    if (schoolId) {
+      query = query.eq('school_id', schoolId);
     }
 
-    // options列现在存储纯数组，兼容旧格式
-    const mappedQuestion = {
-      ...question,
-      options: Array.isArray(question.options) ? question.options : (question.options?.choices || []),
-    };
+    const { data: parents, error } = await query;
 
-    return NextResponse.json({ success: true, question: mappedQuestion });
-  } catch (error) {
-    console.error('获取题目失败:', error);
+    if (error) {
+      return ApiErrors.validation('获取列表失败');
+    }
+
+    // 对手机号脱敏后再返回，避免明文泄露
+    const maskedParents = (parents || []).map((p: any) => ({
+      ...p,
+      phone: maskPhone(p.phone),
+    }));
+
+    return NextResponse.json({
+      success: true,
+      parents: maskedParents
+    });
+
+  } catch (error: any) {
+    console.error('[获取家长列表] 错误:', error);
     return safeError(error);
   }
 }
 
-export async function PUT(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const auth = requireAdmin(request);
+export async function POST(request: NextRequest) {
+  const auth = await requireAdmin(request);
   if (!auth.authenticated) return authError(auth);
   try {
-    const { id } = await params;
     const body = await request.json();
-    const { title, description, question_type, options, dimension, part, is_active, order_index } = body;
+    const { parentId, action, remark, reviewerId } = body;
 
-    if (!title?.trim()) {
-      return ApiErrors.validation('题目内容不能为空');
+    if (!parentId || !action) {
+      return ApiErrors.validation('缺少必要参数');
     }
 
-    const { data: question, error } = await supabaseAdmin
-      .from('pretest_questions')
+    if (!['approve', 'reject'].includes(action)) {
+      return ApiErrors.validation('无效的操作');
+    }
+
+    // 更新审核状态
+    const { error } = await supabase
+      .from('parents')
       .update({
-        title: title.trim(),
-        description: description?.trim() || null,
-        question_type,
-        dimension: dimension || null,
-        part: part || null,
-        is_required: true,
-        options: options || [],
-        is_active: is_active !== undefined ? is_active : true,
-        order_index: order_index !== undefined ? order_index : undefined,
-        updated_at: new Date().toISOString(),
+        status: action === 'approve' ? 'approved' : 'rejected',
+        reviewed_by: auth.payload!.userId,
+        reviewed_at: new Date().toISOString(),
+        review_remark: remark || null
       })
-      .eq('id', id)
-      .select()
-      .single();
+      .eq('id', parentId);
 
     if (error) {
-      console.error('更新题目失败:', error);
-      return supabaseErrorResponse(error, '更新题目失败');
+      return ApiErrors.validation('审核操作失败');
     }
 
-    // options列现在存储纯数组，兼容旧格式
-    const mappedQuestion = {
-      ...question,
-      options: Array.isArray(question.options) ? question.options : (question.options?.choices || []),
-    };
+    return NextResponse.json({
+      success: true,
+      message: action === 'approve' ? '已通过审核' : '已拒绝'
+    });
 
-    return NextResponse.json({ success: true, question: mappedQuestion });
-  } catch (error) {
-    console.error('更新题目失败:', error);
+  } catch (error: any) {
+    console.error('[审核家长] 错误:', error);
     return safeError(error);
-  }
-}
-
-export async function PATCH(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const auth = requireAdmin(request);
-  if (!auth.authenticated) return authError(auth);
-  try {
-    const { id } = await params;
-    const body = await request.json();
-    const { is_active } = body;
-
-    const { data: question, error } = await supabaseAdmin
-      .from('pretest_questions')
-      .update({
-        is_active,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', id)
-      .select()
-      .single();
-
-    if (error) {
-      console.error('更新题目失败:', error);
-      return ApiErrors.validation('更新题目失败');
-    }
-
-    // options列现在存储纯数组，兼容旧格式
-    const mappedQuestion = {
-      ...question,
-      options: Array.isArray(question.options) ? question.options : (question.options?.choices || []),
-    };
-
-    return NextResponse.json({ success: true, question: mappedQuestion });
-  } catch (error) {
-    console.error('更新题目失败:', error);
-    return safeError(error);
-  }
-}
-
-export async function DELETE(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const auth = requireAdmin(request);
-  if (!auth.authenticated) return authError(auth);
-  try {
-    const { id } = await params;
-
-    const { error } = await supabaseAdmin
-      .from('pretest_questions')
-      .delete()
-      .eq('id', id);
-
-    if (error) {
-      console.error('删除题目失败:', error);
-      return ApiErrors.validation('删除题目失败');
-    }
-
-    return NextResponse.json({ success: true });
-  } catch (error) {
-    console.error('删除题目失败:', error);
-    return ApiErrors.validation('删除题目失败');
   }
 }

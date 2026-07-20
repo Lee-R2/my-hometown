@@ -1,14 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireTeam, authError, safeError } from '@/lib/api-auth';
 import { supabaseErrorResponse, ApiErrors } from '@/lib/api-error';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import { FRAGMENTS_PER_GEM } from '@/lib/constants';
 
-const supabase = getSupabaseClient();
+const supabase = getSupabaseAdminClient();
 
 // 获取可赠送的小队列表（同志愿者下的其他小队）
 export async function GET(request: NextRequest) {
-  const auth = requireTeam(request);
+  const auth = await requireTeam(request);
   if (!auth.authenticated) return authError(auth);
   // 强制使用认证令牌中的 userId，防止横向越权
   const teamId = auth.payload!.userId;
@@ -47,7 +47,7 @@ export async function GET(request: NextRequest) {
 
 // 执行积分转账
 export async function POST(request: NextRequest) {
-  const auth = requireTeam(request);
+  const auth = await requireTeam(request);
   if (!auth.authenticated) return authError(auth);
   try {
     const body = await request.json();
@@ -161,15 +161,26 @@ export async function POST(request: NextRequest) {
       .select('id');
 
     if (addError || !creditedTo || creditedTo.length === 0) {
-      // 回滚转出小队积分
-      await supabase
+      // LE-P09: 回滚转出小队积分(带乐观锁 + .select('id') 验证)
+      // 失败时记录告警日志,避免静默丢更新
+      const rollbackResult = await supabase
         .from('teams')
         .update({
           points: fromTeam.points,
           heart_shards: currentShards,
           ...(newGemsEarned > 0 && { heart_gems: currentGemsCount })
         })
-        .eq('id', from_team_id);
+        .eq('id', from_team_id)
+        .eq('points', fromTeam.points - points)
+        .eq('heart_shards', newShards)
+        .select('id');
+      if (!rollbackResult.data || rollbackResult.data.length === 0) {
+        console.error('[transfer] 回滚转出方积分失败,可能产生积分差异', {
+          teamId: from_team_id,
+          expectedPoints: fromTeam.points,
+          deductedPoints: fromTeam.points - points,
+        });
+      }
 
       return NextResponse.json(
         { success: false, error: '操作冲突，请重试' },
@@ -196,22 +207,25 @@ export async function POST(request: NextRequest) {
     }
 
     // 4. 记录转出小队的积分变动
-    await supabase.from('point_transactions').insert({
+    // LE-P09: point_transactions 写入加错误处理,避免静默丢失审计记录
+    const { error: outTxError } = await supabase.from('point_transactions').insert({
       team_id: from_team_id,
       points: -points,
       change_type: 'transfer_out',
       related_id: to_team_id,
       description: `向「${toTeam.name}」赠送 ${points} 积分${message ? `：${message}` : ''}`
     });
+    if (outTxError) console.error('[transfer] 写入转出方审计记录失败:', outTxError);
 
     // 5. 记录转入小队的积分变动
-    await supabase.from('point_transactions').insert({
+    const { error: inTxError } = await supabase.from('point_transactions').insert({
       team_id: to_team_id,
       points: points,
       change_type: 'transfer_in',
       related_id: from_team_id,
       description: `收到「${fromTeam.name}」赠送 ${points} 积分${message ? `：${message}` : ''}`
     });
+    if (inTxError) console.error('[transfer] 写入转入方审计记录失败:', inTxError);
 
     // 6. 记录爱心碎片获得（如果有）
     if (earnedShards > 0) {
@@ -219,14 +233,15 @@ export async function POST(request: NextRequest) {
       if (newGemsEarned > 0) {
         shardDescription += `，并合成了 ${newGemsEarned} 个爱心宝石！`;
       }
-      
-      await supabase.from('point_transactions').insert({
+
+      const { error: shardTxError } = await supabase.from('point_transactions').insert({
         team_id: from_team_id,
         points: 0,
         change_type: 'shard_earned',
         related_id: from_team_id,
         description: shardDescription
       });
+      if (shardTxError) console.error('[transfer] 写入碎片审计记录失败:', shardTxError);
     }
 
     // 7. 发送通知 - 通知赠送方（支出积分）

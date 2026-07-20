@@ -1,20 +1,23 @@
-import { requireParent, authError, safeError } from '@/lib/api-auth';
+import { requireParent, authError, safeError, getAuthenticatedClient } from '@/lib/api-auth';
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
 import { ApiErrors } from '@/lib/api-error';
-
-const supabase = getSupabaseClient();
 
 // 搜索小队
 export async function GET(request: NextRequest) {
   try {
-    const auth = requireParent(request);
+    const auth = await requireParent(request);
     if (!auth.authenticated) return authError(auth);
+
+    const supabase = getAuthenticatedClient(request, auth);
 
     const { searchParams } = new URL(request.url);
     const keyword = searchParams.get('keyword');
-    const parentId = searchParams.get('parentId');
+    const parentIdParam = searchParams.get('parentId');
     const schoolId = searchParams.get('schoolId');
+
+    // LE-A15: 强制使用认证身份,防止家长 A 查询家长 B 的关注关系
+    const parentId = auth.payload!.userId;
+    // parentIdParam 仅作兼容校验,若与登录身份不一致则忽略(不报错以保持前端兼容)
 
     if (!keyword) {
       return ApiErrors.validation('请输入搜索关键词');

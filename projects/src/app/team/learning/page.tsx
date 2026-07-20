@@ -14,6 +14,7 @@ import {
 import { toast } from 'sonner';
 import { useScrollPosition } from '@/hooks/use-scroll-position';
 import { useResponsive } from '@/hooks/use-responsive';
+import { safeJSONParse } from '@/lib/utils';
 
 interface Team {
   id: string;
@@ -81,7 +82,7 @@ export default function LearningPage() {
       return;
     }
     
-    const teamObj = JSON.parse(teamData);
+    const teamObj = safeJSONParse(teamData, null as any);
     setTeam(teamObj);
   }, [router]);
 

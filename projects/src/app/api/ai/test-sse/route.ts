@@ -5,7 +5,7 @@ import { NextRequest, NextResponse } from 'next/server';
  * 测试 SSE 流式响应（仅管理员）
  */
 export async function GET(request: NextRequest) {
-  const auth = requireAdmin(request);
+  const auth = await requireAdmin(request);
   if (!auth.authenticated) return authError(auth);
 
   const encoder = new TextEncoder();

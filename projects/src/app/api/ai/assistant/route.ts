@@ -1,7 +1,7 @@
 import { requireAnyAuth, authError, safeError, buildInternalAuthHeaders } from '@/lib/api-auth';
 import { ApiErrors } from '@/lib/api-error';
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import { checkAiRateLimit } from '@/lib/rate-limit';
 
 import { getTeamData, getSiblingTeamsProgress } from './lib/team-data';
@@ -32,7 +32,7 @@ import { SYSTEM_PROMPT } from './lib/system-prompt';
  */
 
 export async function POST(request: NextRequest) {
-  const auth = requireAnyAuth(request);
+  const auth = await requireAnyAuth(request);
   if (!auth.authenticated) return authError(auth);
 
   const rateLimit = await checkAiRateLimit(request, auth.payload?.userId, 'ai_chat');
@@ -73,7 +73,7 @@ export async function POST(request: NextRequest) {
       }
     } else if (authRole === 'volunteer') {
       // volunteer 身份需校验是否为该小队的指导志愿者
-      const client = getSupabaseClient();
+      const client = getSupabaseAdminClient();
       const { data: team, error: teamError } = await client
         .from('teams')
         .select('assigned_volunteer_id')
@@ -87,7 +87,7 @@ export async function POST(request: NextRequest) {
       }
     } else if (authRole === 'parent') {
       // parent 身份需校验是否关注了该小队
-      const client = getSupabaseClient();
+      const client = getSupabaseAdminClient();
       const { data: follow } = await client
         .from('parent_team_follows')
         .select('id')
@@ -106,7 +106,7 @@ export async function POST(request: NextRequest) {
       return ApiErrors.validation('请输入问题或上传图片');
     }
 
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
 
     // 获取小队完整数据
     const teamData = await getTeamData(client, teamId);

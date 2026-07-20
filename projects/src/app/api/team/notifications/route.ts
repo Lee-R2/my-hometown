@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireTeam, authError, safeError } from '@/lib/api-auth';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { requireTeam, authError, safeError, getAuthenticatedClient } from '@/lib/api-auth';
 import { supabaseErrorResponse, ApiErrors } from '@/lib/api-error';
 
 /**
@@ -8,10 +7,10 @@ import { supabaseErrorResponse, ApiErrors } from '@/lib/api-error';
  * GET /api/team/notifications?teamId=xxx&type=xxx&unreadOnly=true
  */
 export async function GET(request: NextRequest) {
-  const auth = requireTeam(request);
+  const auth = await requireTeam(request);
   if (!auth.authenticated) return authError(auth);
   try {
-    const client = getSupabaseClient();
+    const client = getAuthenticatedClient(request, auth);
     const { searchParams } = new URL(request.url);
     // 强制使用认证令牌中的 userId，防止横向越权
     const teamId = auth.payload!.userId;
@@ -76,10 +75,10 @@ export async function GET(request: NextRequest) {
  * - side_task: 支线任务分配
  */
 export async function POST(request: NextRequest) {
-  const auth = requireTeam(request);
+  const auth = await requireTeam(request);
   if (!auth.authenticated) return authError(auth);
   try {
-    const client = getSupabaseClient();
+    const client = getAuthenticatedClient(request, auth);
     const body = await request.json();
     const {
       type,

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient, getSupabaseAdminClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import { hashPassword } from '@/lib/security';
 import { requireAdminOrVolunteer, requireAdmin, authError, safeError } from '@/lib/api-auth';
 import { ApiErrors } from '@/lib/api-error';
@@ -135,7 +135,7 @@ export async function GET(request: NextRequest) {
 
 // 创建学校
 export async function POST(request: NextRequest) {
-  const auth = requireAdmin(request);
+  const auth = await requireAdmin(request);
   if (!auth.authenticated) return authError(auth);
   try {
     const body = await request.json();

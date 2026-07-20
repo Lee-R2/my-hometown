@@ -1,6 +1,6 @@
 import { requireTeam, authError, safeError } from '@/lib/api-auth';
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import { supabaseErrorResponse, ApiErrors } from '@/lib/api-error';
 
 /**
@@ -8,7 +8,7 @@ import { supabaseErrorResponse, ApiErrors } from '@/lib/api-error';
  * 支持多周期：完成当前主题后可选择新主题
  */
 export async function POST(request: NextRequest) {
-  const auth = requireTeam(request);
+  const auth = await requireTeam(request);
   if (!auth.authenticated) return authError(auth);
 
   try {
@@ -23,7 +23,7 @@ export async function POST(request: NextRequest) {
       return ApiErrors.forbidden('无权为其他小队选择主题');
     }
 
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
 
     // 1. 检查小队是否存在
     const { data: team, error: teamError } = await client

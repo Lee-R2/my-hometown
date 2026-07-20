@@ -7,7 +7,7 @@ import { supabaseErrorResponse, ApiErrors } from '@/lib/api-error';
 const supabaseAdmin = getSupabaseAdminClient();
 
 export async function GET(request: NextRequest) {
-  const auth = requireAdmin(request);
+  const auth = await requireAdmin(request);
   if (!auth.authenticated) return authError(auth);
   try {
     const { data: questions, error } = await supabaseAdmin
@@ -35,7 +35,7 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const auth = requireAdmin(request);
+  const auth = await requireAdmin(request);
   if (!auth.authenticated) return authError(auth);
   try {
     const body = await request.json();

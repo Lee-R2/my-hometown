@@ -1,6 +1,6 @@
 import { requireAdmin, authError, safeError } from '@/lib/api-auth';
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 
 /**
  * 每日定时同步 API
@@ -15,7 +15,7 @@ import { getSupabaseClient } from '@/storage/database/supabase-client';
 
 // 手动触发同步（管理员可调用）
 export async function POST(request: NextRequest) {
-  const auth = requireAdmin(request);
+  const auth = await requireAdmin(request);
   if (!auth.authenticated) return authError(auth);
 
   try {
@@ -34,7 +34,7 @@ export async function POST(request: NextRequest) {
 // 获取同步状态
 export async function GET() {
   try {
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
     const today = new Date().toISOString().split('T')[0];
     
     // 查询今日同步记录
@@ -42,7 +42,7 @@ export async function GET() {
       .from('agent_daily_syncs')
       .select('*')
       .eq('sync_date', today)
-      .eq('sender', 'yinhe_boshi')
+      .eq('sender', 'yinshe_boshi')
       .eq('receiver', 'laxiang_zhushou')
       .single();
     
@@ -50,7 +50,7 @@ export async function GET() {
     const { data: recentSyncs } = await client
       .from('agent_daily_syncs')
       .select('*')
-      .eq('sender', 'yinhe_boshi')
+      .eq('sender', 'yinshe_boshi')
       .order('sync_date', { ascending: false })
       .limit(7);
     
@@ -80,7 +80,7 @@ export async function GET() {
  * 执行每日同步
  */
 async function performDailySync(forceSync: boolean = false) {
-  const client = getSupabaseClient();
+  const client = getSupabaseAdminClient();
   const today = new Date().toISOString().split('T')[0];
   
   // 检查今日是否已同步（除非强制同步）
@@ -89,7 +89,7 @@ async function performDailySync(forceSync: boolean = false) {
       .from('agent_daily_syncs')
       .select('id')
       .eq('sync_date', today)
-      .eq('sender', 'yinhe_boshi')
+      .eq('sender', 'yinshe_boshi')
       .eq('receiver', 'laxiang_zhushou')
       .single();
     
@@ -177,7 +177,7 @@ async function performDailySync(forceSync: boolean = false) {
       content: difficultyFeedbacks.slice(0, 3).map(f => 
         `- ${f.team_name || '未知小队'}：${f.content.substring(0, 100)}`
       ).join('\n'),
-      source: 'yinhe_boshi',
+      source: 'yinshe_boshi',
       related_theme_id: difficultyFeedbacks[0]?.theme_id,
       priority: 'high',
       action_required: true
@@ -193,7 +193,7 @@ async function performDailySync(forceSync: boolean = false) {
       content: recentFeedbacks?.filter(f => f.category === 'creativity').slice(0, 3).map(f => 
         `- ${f.team_name || '未知小队'}：${f.content.substring(0, 100)}`
       ).join('\n') || '无',
-      source: 'yinhe_boshi',
+      source: 'yinshe_boshi',
       priority: 'normal'
     });
   }
@@ -207,7 +207,7 @@ async function performDailySync(forceSync: boolean = false) {
       content: recentFeedbacks?.filter(f => f.category === 'suggestion').slice(0, 3).map(f => 
         `- ${f.team_name || '未知小队'}：${f.content.substring(0, 100)}`
       ).join('\n') || '无',
-      source: 'yinhe_boshi',
+      source: 'yinshe_boshi',
       priority: 'normal',
       action_required: true
     });
@@ -219,7 +219,7 @@ async function performDailySync(forceSync: boolean = false) {
     reminder_type: 'sync_summary',
     title: `每日同步摘要（${today}）`,
     content: summary,
-    source: 'yinhe_boshi',
+    source: 'yinshe_boshi',
     priority: 'normal'
   });
   
@@ -231,7 +231,7 @@ async function performDailySync(forceSync: boolean = false) {
   // 5. 保存同步记录
   await client.from('agent_daily_syncs').insert({
     sync_date: today,
-    sender: 'yinhe_boshi',
+    sender: 'yinshe_boshi',
     receiver: 'laxiang_zhushou',
     feedback_count: totalFeedback,
     summary,

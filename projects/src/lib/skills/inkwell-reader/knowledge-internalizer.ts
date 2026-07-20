@@ -4,7 +4,7 @@
  */
 
 import { LLMClient, Config } from 'coze-coding-dev-sdk';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import { AI_API_KEY, AI_BASE_URL, AI_MODEL_BASE_URL } from '../../ai-config';
 
 // Agent 与 agent_memories 中的 username 映射
@@ -148,7 +148,7 @@ async function saveSkillsToMemory(
     keyInsights: string[];
   }
 ): Promise<number> {
-  const client = getSupabaseClient();
+  const client = getSupabaseAdminClient();
   const agentUsername = AGENT_USERNAMES[agentKey];
   if (!agentUsername) return 0;
 
@@ -237,7 +237,7 @@ export async function internalizeArticle(
 }> {
   try {
     // Step 1: 检查是否已经内化过这篇文章
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
     const agentUsername = AGENT_USERNAMES[agentKey];
     if (agentUsername) {
       const { data: existing } = await client
@@ -362,7 +362,7 @@ export async function getInternalizedSkills(
     source: string;
   }>;
 }> {
-  const client = getSupabaseClient();
+  const client = getSupabaseAdminClient();
   const agentUsername = AGENT_USERNAMES[agentKey];
   if (!agentUsername) {
     return { success: false, agentKey, totalSkills: 0, skills: [] };

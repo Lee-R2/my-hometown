@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireTeam, authError, safeError } from '@/lib/api-auth';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { requireTeam, authError, safeError, getAuthenticatedClient } from '@/lib/api-auth';
 import { ApiErrors } from '@/lib/api-error';
 
 /**
@@ -110,10 +109,10 @@ function groupTasksByGroupId(tasks: any[]): Map<string, any[]> {
 }
 
 export async function GET(request: NextRequest) {
-  const auth = requireTeam(request);
+  const auth = await requireTeam(request);
   if (!auth.authenticated) return authError(auth);
   try {
-    const client = getSupabaseClient();
+    const client = getAuthenticatedClient(request, auth);
     // 强制使用认证令牌中的 userId，防止横向越权
     const teamId = auth.payload!.userId;
 

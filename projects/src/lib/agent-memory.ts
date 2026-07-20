@@ -1,4 +1,5 @@
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
+import type { SupabaseClient } from '@supabase/supabase-js';
 
 /**
  * 智能体记忆系统工具
@@ -7,6 +8,28 @@ import { getSupabaseClient } from '@/storage/database/supabase-client';
 
 // 智能体白名单
 const ALLOWED_AGENTS = ['yinshe_boshi', 'laxiang_zhushou'];
+
+/**
+ * 安全修复 LE-M02: 批量更新记忆的最后访问时间(时间衰减系统的基础)
+ * 记忆蒸馏器根据 last_accessed_at 判断哪些记忆是低频访问的,从而进行归档/合并。
+ * access_count 递增由蒸馏器在后台定期处理,避免并发写入冲突。
+ * 访问时间更新失败不影响主流程(静默失败)。
+ *
+ * 安全修复 SEC-001: 新增 client 参数,允许调用方传入绑定用户身份的 anon 客户端
+ * (RLS 生效)。不传时回退到默认客户端(阶段 3 后为 anon)。
+ */
+async function touchMemories(ids: string[], client?: SupabaseClient): Promise<void> {
+  if (ids.length === 0) return;
+  try {
+    const db = client ?? getSupabaseAdminClient();
+    await db
+      .from('agent_memories')
+      .update({ last_accessed_at: new Date().toISOString() })
+      .in('id', ids);
+  } catch (e) {
+    // 访问时间更新失败不影响主流程
+  }
+}
 
 // 记忆类型
 export type MemoryType = 'user_info' | 'team_info' | 'task_progress' | 'preference' | 'important_fact' | 'conversation_summary' | 'learning_difficulty' | 'learning_interest' | 'interaction_style' | 'teaching_point' | 'admin_profile' | 'work_concern' | 'review_style' | 'school_context' | 'communication_style' | 'data_insight';
@@ -60,7 +83,8 @@ export async function addMemory(
   content: string,
   contextKey?: string,
   contextValue?: string,
-  importance: number = 5
+  importance: number = 5,
+  client?: SupabaseClient
 ): Promise<Memory | null> {
   if (!ALLOWED_AGENTS.includes(agentUsername)) {
     console.error('无效的智能体:', agentUsername);
@@ -68,11 +92,11 @@ export async function addMemory(
   }
 
   try {
-    const client = getSupabaseClient();
+    const db = client ?? getSupabaseAdminClient();
 
     // 检查是否已存在相同的记忆
     if (contextKey && contextValue) {
-      const { data: existing } = await client
+      const { data: existing } = await db
         .from('agent_memories')
         .select('id')
         .eq('agent_username', agentUsername)
@@ -84,7 +108,7 @@ export async function addMemory(
 
       if (existing) {
         // 更新已有记忆
-        const { data, error } = await client
+        const { data, error } = await db
           .from('agent_memories')
           .update({
             content,
@@ -101,7 +125,13 @@ export async function addMemory(
     }
 
     // 新增记忆
-    const { data, error } = await client
+    // LE-M06: L1 短期记忆设置 24h 过期时间,与系统提示词声明一致
+    // task_progress / user_intent 等短期记忆类型设置 24h 过期,长期记忆永不过期
+    const shortTermTypes: MemoryType[] = ['task_progress'];
+    const expiresAt = shortTermTypes.includes(memoryType)
+      ? new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
+      : null; // L2/L3 长期记忆永不过期(expires_at = null)
+    const { data, error } = await db
       .from('agent_memories')
       .insert({
         agent_username: agentUsername,
@@ -110,7 +140,10 @@ export async function addMemory(
         context_key: contextKey,
         context_value: contextValue,
         importance,
-        is_active: true
+        is_active: true,
+        expires_at: expiresAt,
+        last_accessed_at: new Date().toISOString(),
+        access_count: 0,
       })
       .select()
       .single();
@@ -134,7 +167,8 @@ export async function getMemories(
     contextValue?: string;
     minImportance?: number;
     limit?: number;
-  }
+  },
+  client?: SupabaseClient
 ): Promise<Memory[]> {
   if (!ALLOWED_AGENTS.includes(agentUsername)) {
     console.error('无效的智能体:', agentUsername);
@@ -142,10 +176,10 @@ export async function getMemories(
   }
 
   try {
-    const client = getSupabaseClient();
+    const db = client ?? getSupabaseAdminClient();
     // 过滤已过期的 L1 短期记忆（expires_at 为 null 表示永不过期，gt now 表示未过期）
     const nowIso = new Date().toISOString();
-    let query = client
+    let query = db
       .from('agent_memories')
       .select('*')
       .eq('agent_username', agentUsername)
@@ -173,6 +207,11 @@ export async function getMemories(
     const { data, error } = await query;
     if (error) throw error;
 
+    // 安全修复 LE-M02: 更新访问时间,使时间衰减系统能正确工作
+    if (data && data.length > 0) {
+      await touchMemories(data.map(m => m.id), client);
+    }
+
     return data || [];
   } catch (error) {
     console.error('获取记忆失败:', error);
@@ -186,13 +225,14 @@ export async function getMemories(
 export async function getContextMemories(
   agentUsername: string,
   contextKey: string,
-  contextValue: string
+  contextValue: string,
+  client?: SupabaseClient
 ): Promise<Memory[]> {
   return getMemories(agentUsername, {
     contextKey,
     contextValue,
     limit: 50
-  });
+  }, client);
 }
 
 /**
@@ -205,7 +245,8 @@ export async function searchMemories(
     memoryTypes?: MemoryType[];
     minImportance?: number;
     limit?: number;
-  }
+  },
+  client?: SupabaseClient
 ): Promise<Memory[]> {
   if (!ALLOWED_AGENTS.includes(agentUsername)) {
     console.error('无效的智能体:', agentUsername);
@@ -213,11 +254,11 @@ export async function searchMemories(
   }
 
   try {
-    const client = getSupabaseClient();
+    const db = client ?? getSupabaseAdminClient();
 
     // 过滤已过期的 L1 短期记忆
     const nowIso = new Date().toISOString();
-    let query = client
+    let query = db
       .from('agent_memories')
       .select('*')
       .eq('agent_username', agentUsername)
@@ -245,6 +286,11 @@ export async function searchMemories(
       results = results.filter(item => options.memoryTypes!.includes(item.memory_type));
     }
 
+    // 安全修复 LE-M02: 更新访问时间,使时间衰减系统能正确工作
+    if (results.length > 0) {
+      await touchMemories(results.map(m => m.id), client);
+    }
+
     return results;
   } catch (error) {
     console.error('搜索记忆失败:', error);
@@ -261,7 +307,8 @@ export async function saveConversation(
   role: 'user' | 'assistant',
   content: string,
   userId?: string,
-  userName?: string
+  userName?: string,
+  client?: SupabaseClient
 ): Promise<string | null> {
   if (!ALLOWED_AGENTS.includes(agentUsername)) {
     console.error('无效的智能体:', agentUsername);
@@ -269,10 +316,10 @@ export async function saveConversation(
   }
 
   try {
-    const client = getSupabaseClient();
+    const db = client ?? getSupabaseAdminClient();
 
     // 更新会话活动时间
-    await client
+    await db
       .from('agent_sessions')
       .update({
         last_activity_at: new Date().toISOString()
@@ -281,7 +328,7 @@ export async function saveConversation(
       .eq('is_active', true);
 
     // 添加对话消息
-    const { data, error } = await client
+    const { data, error } = await db
       .from('agent_conversations')
       .insert({
         agent_username: agentUsername,
@@ -314,7 +361,8 @@ export async function getConversations(
   agentUsername: string,
   sessionId: string,
   limit: number = 20,
-  userId?: string
+  userId?: string,
+  client?: SupabaseClient
 ): Promise<Conversation[]> {
   if (!ALLOWED_AGENTS.includes(agentUsername)) {
     console.error('无效的智能体:', agentUsername);
@@ -322,9 +370,9 @@ export async function getConversations(
   }
 
   try {
-    const client = getSupabaseClient();
+    const db = client ?? getSupabaseAdminClient();
 
-    let query = client
+    let query = db
       .from('agent_conversations')
       .select('*')
       .eq('agent_username', agentUsername)
@@ -354,7 +402,8 @@ export async function getConversations(
 export async function getUserConversations(
   agentUsername: string,
   userId: string,
-  limit: number = 10
+  limit: number = 10,
+  client?: SupabaseClient
 ): Promise<Conversation[]> {
   if (!ALLOWED_AGENTS.includes(agentUsername)) {
     console.error('无效的智能体:', agentUsername);
@@ -362,11 +411,11 @@ export async function getUserConversations(
   }
 
   try {
-    const client = getSupabaseClient();
+    const db = client ?? getSupabaseAdminClient();
 
     // 只获取最近 7 天的对话记录，按时间倒序取最新 limit 条，再正序返回
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
-    const { data, error } = await client
+    const { data, error } = await db
       .from('agent_conversations')
       .select('*')
       .eq('agent_username', agentUsername)
@@ -391,7 +440,8 @@ export async function getOrCreateSession(
   agentUsername: string,
   userId?: string,
   teamId?: string,
-  sessionId?: string
+  sessionId?: string,
+  client?: SupabaseClient
 ): Promise<{ session: AgentSession; isNew: boolean } | null> {
   if (!ALLOWED_AGENTS.includes(agentUsername)) {
     console.error('无效的智能体:', agentUsername);
@@ -399,11 +449,11 @@ export async function getOrCreateSession(
   }
 
   try {
-    const client = getSupabaseClient();
+    const db = client ?? getSupabaseAdminClient();
     const finalSessionId = sessionId || `session_${Date.now()}_${Math.random().toString(36).substring(7)}`;
 
     // 检查会话是否已存在
-    const { data: existing } = await client
+    const { data: existing } = await db
       .from('agent_sessions')
       .select('*')
       .eq('session_id', finalSessionId)
@@ -412,7 +462,7 @@ export async function getOrCreateSession(
 
     if (existing) {
       // 更新会话
-      await client
+      await db
         .from('agent_sessions')
         .update({
           last_activity_at: new Date().toISOString()
@@ -423,7 +473,7 @@ export async function getOrCreateSession(
     }
 
     // 创建新会话
-    const { data, error } = await client
+    const { data, error } = await db
       .from('agent_sessions')
       .insert({
         agent_username: agentUsername,
@@ -445,11 +495,11 @@ export async function getOrCreateSession(
 /**
  * 关闭会话
  */
-export async function closeSession(sessionId: string): Promise<boolean> {
+export async function closeSession(sessionId: string, client?: SupabaseClient): Promise<boolean> {
   try {
-    const client = getSupabaseClient();
+    const db = client ?? getSupabaseAdminClient();
 
-    const { error } = await client
+    const { error } = await db
       .from('agent_sessions')
       .update({
         is_active: false,
@@ -470,12 +520,13 @@ export async function closeSession(sessionId: string): Promise<boolean> {
  */
 export async function updateMemoryImportance(
   memoryId: string,
-  importance: number
+  importance: number,
+  client?: SupabaseClient
 ): Promise<boolean> {
   try {
-    const client = getSupabaseClient();
+    const db = client ?? getSupabaseAdminClient();
 
-    const { error } = await client
+    const { error } = await db
       .from('agent_memories')
       .update({
         importance,
@@ -494,11 +545,11 @@ export async function updateMemoryImportance(
 /**
  * 删除记忆（软删除）
  */
-export async function deleteMemory(memoryId: string): Promise<boolean> {
+export async function deleteMemory(memoryId: string, client?: SupabaseClient): Promise<boolean> {
   try {
-    const client = getSupabaseClient();
+    const db = client ?? getSupabaseAdminClient();
 
-    const { error } = await client
+    const { error } = await db
       .from('agent_memories')
       .update({
         is_active: false,
@@ -519,7 +570,8 @@ export async function deleteMemory(memoryId: string): Promise<boolean> {
  */
 export async function extractAndSaveMemories(
   agentUsername: string,
-  conversations: Conversation[]
+  conversations: Conversation[],
+  client?: SupabaseClient
 ): Promise<void> {
   // 这里可以添加基于对话内容自动提取重要信息的逻辑
   // 目前是简单的实现，后续可以集成LLM来提取关键信息
@@ -540,7 +592,8 @@ export async function extractAndSaveMemories(
               `用户名字: ${nameMatch[1]}`,
               'user_id',
               conv.user_id || 'unknown',
-              7
+              7,
+              client
             );
           }
         }
@@ -554,7 +607,8 @@ export async function extractAndSaveMemories(
               `用户提到的小队/团队信息: ${teamMatch[1]}`,
               'user_id',
               conv.user_id || 'unknown',
-              5
+              5,
+              client
             );
           }
         }
@@ -579,7 +633,8 @@ export async function getCrossAgentMemories(
   options?: {
     memoryTypes?: MemoryType[];
     limit?: number;
-  }
+  },
+  client?: SupabaseClient
 ): Promise<Map<string, Memory[]>> {
   if (!ALLOWED_AGENTS.includes(fromAgent)) {
     console.error('[跨智能体记忆] 无效的智能体:', fromAgent);
@@ -591,12 +646,12 @@ export async function getCrossAgentMemories(
   }
 
   try {
-    const client = getSupabaseClient();
+    const db = client ?? getSupabaseAdminClient();
 
     // 查询来源智能体中，context_key='team_id' 且 context_value 在 teamIds 中的记忆
     // 过滤已过期的 L1 短期记忆
     const nowIso = new Date().toISOString();
-    let query = client
+    let query = db
       .from('agent_memories')
       .select('*')
       .eq('agent_username', fromAgent)
@@ -627,6 +682,11 @@ export async function getCrossAgentMemories(
         memoriesByTeam.set(teamId, []);
       }
       memoriesByTeam.get(teamId)!.push(mem);
+    }
+
+    // 安全修复 LE-M02: 更新访问时间,使时间衰减系统能正确工作
+    if (data && data.length > 0) {
+      await touchMemories(data.map(m => m.id), client);
     }
 
     return memoriesByTeam;
@@ -713,10 +773,11 @@ export function formatCrossAgentMemories(
 export async function buildContextWithMemory(
   agentUsername: string,
   sessionId: string,
-  currentMessage: string
+  currentMessage: string,
+  client?: SupabaseClient
 ): Promise<string> {
-  const memories = await getMemories(agentUsername, { limit: 10 });
-  const conversations = await getConversations(agentUsername, sessionId, 10);
+  const memories = await getMemories(agentUsername, { limit: 10 }, client);
+  const conversations = await getConversations(agentUsername, sessionId, 10, undefined, client);
 
   let context = '';
 

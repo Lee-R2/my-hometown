@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import { requireAdminOrVolunteer, authError, safeError } from '@/lib/api-auth';
 import { supabaseErrorResponse, ApiErrors } from '@/lib/api-error';
 
 export async function POST(request: NextRequest) {
-  const auth = requireAdminOrVolunteer(request);
+  const auth = await requireAdminOrVolunteer(request);
   if (!auth.authenticated) return authError(auth);
   try {
     const { userId, hintIds } = await request.json();
@@ -13,7 +13,7 @@ export async function POST(request: NextRequest) {
       return ApiErrors.validation('缺少用户ID');
     }
 
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
 
     let query = client
       .from('notifications')

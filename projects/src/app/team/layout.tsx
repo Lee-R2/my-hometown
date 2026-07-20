@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { usePathname } from 'next/navigation';
 import dynamic from 'next/dynamic';
 import { DataSyncProvider } from '@/contexts/data-sync-context';
@@ -26,6 +26,8 @@ export default function TeamLayout({
   const pathname = usePathname();
   const [team, setTeam] = useState<Team | null>(null);
   const [checked, setChecked] = useState(false);
+  // LE-F05: AbortController 防止卸载后 setState
+  const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     // 登录页面不需要检查
@@ -34,8 +36,15 @@ export default function TeamLayout({
       return;
     }
 
+    // LE-F05: 取消上一个未完成请求,防止快速切换路由时卸载组件后 setState
+    if (abortRef.current) {
+      abortRef.current.abort();
+    }
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     // 优先从 /api/auth/me 获取小队信息（基于 HttpOnly Cookie 认证）
-    fetch('/api/auth/me')
+    fetch('/api/auth/me', { signal: controller.signal })
       .then(res => res.json())
       .then(data => {
         if (data.authenticated && data.role === 'team') {
@@ -58,7 +67,9 @@ export default function TeamLayout({
           window.location.href = '/team/login';
         }
       })
-      .catch(() => {
+      .catch((err: any) => {
+        // LE-F05: 主动 abort 不算错误,不跳转
+        if (err?.name === 'AbortError') return;
         // 网络错误时也一律跳转登录页（不降级到 localStorage，避免鉴权绕过）
         localStorage.removeItem('team');
         window.location.href = '/team/login';

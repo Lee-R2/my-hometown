@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireTeam, authError, safeError } from '@/lib/api-auth';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { requireTeam, authError, safeError, getAuthenticatedClient } from '@/lib/api-auth';
 import { ApiErrors } from '@/lib/api-error';
 
 /**
@@ -30,10 +29,10 @@ function mapFormToFrontend(dbRow: any) {
 }
 
 export async function GET(request: NextRequest) {
-  const auth = requireTeam(request);
+  const auth = await requireTeam(request);
   if (!auth.authenticated) return authError(auth);
   try {
-    const client = getSupabaseClient();
+    const client = getAuthenticatedClient(request, auth);
     const { searchParams } = new URL(request.url);
     const teamId = auth.payload!.userId;
     const taskId = searchParams.get('taskId');
@@ -323,10 +322,10 @@ export async function GET(request: NextRequest) {
  * POST /api/team/final-task-feedback
  */
 export async function POST(request: NextRequest) {
-  const auth = requireTeam(request);
+  const auth = await requireTeam(request);
   if (!auth.authenticated) return authError(auth);
   try {
-    const client = getSupabaseClient();
+    const client = getAuthenticatedClient(request, auth);
     const body = await request.json();
     const { teamId, taskId, memberId, memberRole, formId, formData } = body;
 
@@ -465,7 +464,7 @@ export async function POST(request: NextRequest) {
  * 完成最后任务并归档主题
  */
 async function finalizeFinalTask(
-  client: ReturnType<typeof getSupabaseClient>,
+  client: ReturnType<typeof getAuthenticatedClient>,
   teamId: string,
   taskId: string,
   cycle: number
@@ -568,7 +567,8 @@ async function finalizeFinalTask(
     }
 
     // 步骤2：更新主题选择记录为 completed
-    const { error: selectionUpdateError } = await client
+    // LE-P20: 带乐观锁 + .select('id') 验证,失败时记录告警
+    const { data: selectionResult, error: selectionUpdateError } = await client
       .from('team_theme_selections')
       .update({
         status: 'completed',
@@ -576,10 +576,11 @@ async function finalizeFinalTask(
       })
       .eq('team_id', teamId)
       .eq('theme_id', themeId)
-      .eq('cycle', cycle);
+      .eq('cycle', cycle)
+      .select('id');
 
-    if (selectionUpdateError) {
-      console.error('更新主题选择记录失败:', selectionUpdateError);
+    if (selectionUpdateError || !selectionResult || selectionResult.length === 0) {
+      console.error('更新主题选择记录失败:', selectionUpdateError?.message || '0 行更新(已被并发处理或记录不存在)');
     }
 
     const { data: checkSelection } = await client
@@ -592,14 +593,19 @@ async function finalizeFinalTask(
 
     if (!checkSelection) {
       console.warn(`主题选择记录未匹配theme_id，尝试按 cycle 更新: team=${teamId}, cycle=${cycle}`);
-      await client
+      // LE-P20: 第二次更新也带 .select('id') 验证
+      const { data: fallbackResult, error: fallbackErr } = await client
         .from('team_theme_selections')
         .update({
           status: 'completed',
           completed_at: new Date().toISOString(),
         })
         .eq('team_id', teamId)
-        .eq('cycle', cycle);
+        .eq('cycle', cycle)
+        .select('id');
+      if (fallbackErr || !fallbackResult || fallbackResult.length === 0) {
+        console.error('[finalizeFinalTask] 按 cycle 更新主题选择记录失败:', fallbackErr?.message || '0 行更新');
+      }
     }
 
     // 步骤3：重置 teams 表当前主题/任务状态 + cycle+1
@@ -642,7 +648,7 @@ async function finalizeFinalTask(
  * 检查是否所有需要提交的成员都已提交（按周期）
  */
 async function checkAllMembersSubmitted(
-  client: ReturnType<typeof getSupabaseClient>,
+  client: ReturnType<typeof getAuthenticatedClient>,
   teamId: string,
   taskId: string,
   cycle: number

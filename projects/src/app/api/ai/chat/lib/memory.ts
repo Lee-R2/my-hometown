@@ -5,7 +5,8 @@
  * 原文件保持不变，本模块仅创建不引用。
  */
 
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
+import { formatTimeLabel } from '@/lib/time-format';
 
 /**
  * 安全修复（P3 输入校验）：对从 AI 输出中正则提取的内容做基本 sanitization
@@ -20,34 +21,13 @@ function sanitizeExtracted(text: string, maxLen = 1000): string {
 }
 
 /**
- * 格式化时间标签（如"3天前"、"刚刚"、"2小时前"）
- * 让 LLM 能感知记忆的时间远近，避免把旧记忆当近期内容主动提及
- */
-function formatTimeLabel(dateStr?: string | null): string {
-  if (!dateStr) return '';
-  const date = new Date(dateStr);
-  if (isNaN(date.getTime())) return '';
-  const diffMs = Date.now() - date.getTime();
-  if (diffMs < 0) return '刚刚';
-  const diffMin = Math.floor(diffMs / 60000);
-  const diffHour = Math.floor(diffMin / 60);
-  const diffDay = Math.floor(diffHour / 24);
-  if (diffMin < 1) return '刚刚';
-  if (diffMin < 60) return `${diffMin}分钟前`;
-  if (diffHour < 24) return `${diffHour}小时前`;
-  if (diffDay < 7) return `${diffDay}天前`;
-  if (diffDay < 30) return `${Math.floor(diffDay / 7)}周前`;
-  return `${Math.floor(diffDay / 30)}个月前`;
-}
-
-/**
  * 批量更新记忆的最后访问时间（时间衰减系统的基础）
  * access_count 递增由蒸馏器在后台定期处理，避免并发写入冲突
  */
 async function touchMemories(ids: string[]): Promise<void> {
   if (ids.length === 0) return;
   try {
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
     await client
       .from('agent_memories')
       .update({ last_accessed_at: new Date().toISOString() })
@@ -66,7 +46,7 @@ export async function saveToMemory(
   userName?: string
 ) {
   try {
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
     
     // 保存对话消息
     await client.from('agent_conversations').insert({
@@ -104,7 +84,7 @@ export async function extractImportantInfo(
   sessionId?: string
 ) {
   try {
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
     
     // 提取用户姓名
     const namePatterns = [
@@ -315,7 +295,7 @@ export async function getRelevantMemories(
   sessionId?: string
 ): Promise<string> {
   try {
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
     const memories: string[] = [];
 
     // 构建查询条件
@@ -374,7 +354,7 @@ export async function getRelevantMemories(
     }
 
     // 银蛇博士专属：获取小队完整数据
-    if (agentUsername === 'yinhe_boshi' && teamId) {
+    if (agentUsername === 'yinshe_boshi' && teamId) {
       memories.push('\n【小队完整数据】');
       
       try {
@@ -561,7 +541,7 @@ export async function getRelevantMemories(
         .from('agent_daily_syncs')
         .select('summary, feedback_count, details')
         .eq('sync_date', today)
-        .eq('sender', 'yinhe_boshi')
+        .eq('sender', 'yinshe_boshi')
         .eq('receiver', 'laxiang_zhushou')
         .single();
 
@@ -643,7 +623,8 @@ export async function getRelevantMemories(
         .from('agent_conversations')
         .select('role, content, created_at, session_id')
         .eq('agent_username', agentUsername)
-        .ilike('session_id', `%${teamId}%`)
+        // LE-M07: 使用精确匹配而非 ilike 模糊匹配,防止加载到其他团队的对话历史
+        .like('session_id', `yinhe_team_${teamId}_%`)
         .gte('created_at', sevenDaysAgo)
         .order('created_at', { ascending: false })
         .limit(10);
@@ -799,7 +780,7 @@ export async function getOrCreateSession(
   sessionId?: string
 ): Promise<string> {
   try {
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
     
     // 如果传入了 sessionId，直接使用（前端已基于 teamId/userId 生成固定 ID）
     if (sessionId) {
@@ -832,12 +813,13 @@ export async function getOrCreateSession(
       return sessionId;
     }
     
-    // 如果没有传入 sessionId，基于 teamId 或 userId 生成固定的 sessionId
+    // 如果没有传入 sessionId，基于 teamId 或 userId 生成 sessionId
+    // LE-M09: fallback 也加时间戳,防止同一用户/团队复用同一 sessionId 导致上下文无限累积
     let finalSessionId = '';
     if (teamId) {
-      finalSessionId = `yinhe_team_${teamId}`;
+      finalSessionId = `yinhe_team_${teamId}_${Date.now()}`;
     } else if (userId) {
-      finalSessionId = `laxiang_user_${userId}`;
+      finalSessionId = `laxiang_user_${userId}_${Date.now()}`;
     } else {
       finalSessionId = `session_${Date.now()}_${Math.random().toString(36).substring(7)}`;
     }

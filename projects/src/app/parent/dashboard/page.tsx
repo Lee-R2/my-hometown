@@ -4,8 +4,9 @@
 // 仪表盘是动态客户端页面，直接禁用静态生成避免构建报错。
 export const dynamic = 'force-dynamic';
 
-import { useState, useEffect, Suspense } from 'react';
+import { useState, useEffect, useRef, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
+import { safeGetJSON } from '@/lib/utils';
 
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -178,18 +179,20 @@ function ParentDashboardContent() {
   const [schoolResults, setSchoolResults] = useState<any[]>([]);
   const [selectedSchool, setSelectedSchool] = useState<any>(null);
   const [searchingSchool, setSearchingSchool] = useState(false);
+  // LE-F09: 学校搜索 AbortController,防止快速输入时旧请求覆盖新结果(竞态)
+  const schoolSearchAbortRef = useRef<AbortController | null>(null);
   const [childNameInForm, setChildNameInForm] = useState('');
   const [childGradeInForm, setChildGradeInForm] = useState('');
   const [relationInForm, setRelationInForm] = useState('');
   const [otherRelation, setOtherRelation] = useState('');
   const [guardianReason, setGuardianReason] = useState('');
   useEffect(() => {
-    const savedParent = localStorage.getItem('parent');
-    if (!savedParent) {
+    const parentData = safeGetJSON<any>('parent', null);
+    if (!parentData) {
       router.push('/parent/login');
       return;
     }
-    setParent(JSON.parse(savedParent));
+    setParent(parentData);
     loadFollows(true);
   }, []);
 
@@ -201,18 +204,32 @@ function ParentDashboardContent() {
         return;
       }
 
+      // LE-F09: 取消上一个未完成请求,防止快速输入时旧响应覆盖新结果(竞态)
+      if (schoolSearchAbortRef.current) {
+        schoolSearchAbortRef.current.abort();
+      }
+      const controller = new AbortController();
+      schoolSearchAbortRef.current = controller;
+
       setSearchingSchool(true);
       try {
-        const res = await fetch(`/api/parent/schools?keyword=${encodeURIComponent(schoolKeyword)}`);
+        const res = await fetch(`/api/parent/schools?keyword=${encodeURIComponent(schoolKeyword)}`, {
+          signal: controller.signal,
+        });
         if (!res.ok) return;
         const data = await res.json();
         if (data.success) {
           setSchoolResults(data.schools || []);
         }
-      } catch (err) {
+      } catch (err: any) {
+        // LE-F09: 主动 abort 不算错误
+        if (err?.name === 'AbortError') return;
         console.error('搜索学校失败', err);
       } finally {
-        setSearchingSchool(false);
+        // LE-F09: 仅当本次请求是最新请求时才重置 loading,避免被 abort 的请求把 loading 提前置回 false
+        if (schoolSearchAbortRef.current === controller) {
+          setSearchingSchool(false);
+        }
       }
     };
 
@@ -221,10 +238,9 @@ function ParentDashboardContent() {
   }, [schoolKeyword]);
 
   const loadFollows = async (includeHistory = false) => {
-    const savedParent = localStorage.getItem('parent');
-    if (!savedParent) return;
+    const parentData = safeGetJSON<any>('parent', null);
+    if (!parentData) return;
 
-    const parentData = JSON.parse(savedParent);
     setLoading(true);
     try {
       const res = await fetch(`/api/parent/teams?parentId=${parentData.id}&includeHistory=${includeHistory}`);
@@ -250,8 +266,7 @@ function ParentDashboardContent() {
         return;
       }
 
-      const savedParent = localStorage.getItem('parent');
-      const parentId = savedParent ? JSON.parse(savedParent).id : '';
+      const parentId = safeGetJSON<any>('parent', null)?.id || '';
 
       setSearching(true);
       try {
@@ -279,8 +294,7 @@ function ParentDashboardContent() {
   const handleSearch = async () => {
     if (!searchKeyword.trim()) return;
 
-    const savedParent = localStorage.getItem('parent');
-    const parentId = savedParent ? JSON.parse(savedParent).id : '';
+    const parentId = safeGetJSON<any>('parent', null)?.id || '';
 
     setSearching(true);
     try {
@@ -326,10 +340,9 @@ function ParentDashboardContent() {
     }
     if (!selectedFollowDetail) return;
 
-    const savedParent = localStorage.getItem('parent');
-    if (!savedParent) return;
+    const parentData = safeGetJSON<any>('parent', null);
+    if (!parentData) return;
 
-    const parentData = JSON.parse(savedParent);
     const actualRelation = editRelation === '其他' ? editOtherRelation : editRelation;
 
     try {
@@ -383,11 +396,9 @@ function ParentDashboardContent() {
       }
     }
 
-    const savedParent = localStorage.getItem('parent');
-    if (!savedParent) return;
+    const parentData = safeGetJSON<any>('parent', null);
+    if (!parentData) return;
 
-    const parentData = JSON.parse(savedParent);
-    
     // 实际关系：如果是"其他"，存储填写的关系；否则存储选项值
     const actualRelation = relationInForm === '其他' ? otherRelation : relationInForm;
     

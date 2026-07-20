@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireTeam, authError, safeError } from '@/lib/api-auth';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { requireTeam, authError, safeError, getAuthenticatedClient } from '@/lib/api-auth';
 import { ApiErrors, supabaseErrorResponse } from '@/lib/api-error';
 
 /**
@@ -8,7 +7,7 @@ import { ApiErrors, supabaseErrorResponse } from '@/lib/api-error';
  * 安全修复：team 角色只能查自己的信息，忽略客户端传入的 team_id
  */
 export async function GET(request: NextRequest) {
-  const auth = requireTeam(request);
+  const auth = await requireTeam(request);
   if (!auth.authenticated) return authError(auth);
   try {
     // 强制使用认证令牌中的 userId，防止横向越权
@@ -18,7 +17,7 @@ export async function GET(request: NextRequest) {
       return ApiErrors.validation('认证令牌无效');
     }
 
-    const supabase = getSupabaseClient();
+    const supabase = getAuthenticatedClient(request, auth);
 
     const { data, error } = await supabase
       .from('teams')

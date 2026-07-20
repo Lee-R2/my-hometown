@@ -9,7 +9,7 @@
  * L4 - 核心身份：不可变的人格/偏好，agent_memories 表，永不过期
  */
 
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 
 // 记忆层级
 export type MemoryLayer = 0 | 1 | 2 | 3 | 4;
@@ -51,7 +51,7 @@ export interface SessionState {
  */
 export async function saveMemory(entry: Omit<MemoryEntry, 'id' | 'access_count' | 'last_accessed_at'>): Promise<string | null> {
   try {
-    const supabase = getSupabaseClient();
+    const supabase = getSupabaseAdminClient();
     const config = LAYER_CONFIG[entry.layer];
     
     const expiresAt = config.ttl 
@@ -98,7 +98,7 @@ export async function loadMemories(params: {
   includeExpired?: boolean;
 }): Promise<MemoryEntry[]> {
   try {
-    const supabase = getSupabaseClient();
+    const supabase = getSupabaseAdminClient();
     let query = supabase
       .from('agent_memories')
       .select('*')
@@ -160,7 +160,7 @@ export async function searchMemories(params: {
   limit?: number;
 }): Promise<MemoryEntry[]> {
   try {
-    const supabase = getSupabaseClient();
+    const supabase = getSupabaseAdminClient();
     const { data, error } = await supabase
       .from('agent_memories')
       .select('*')
@@ -191,7 +191,7 @@ export async function distillMemories(params: {
   minAccessCount?: number;
 }): Promise<number> {
   try {
-    const supabase = getSupabaseClient();
+    const supabase = getSupabaseAdminClient();
     const minImportance = params.minImportance || 0.7;
     const minAccessCount = params.minAccessCount || 2;
 
@@ -236,7 +236,7 @@ export async function distillMemories(params: {
  */
 export async function cleanExpiredMemories(agentUsername: string): Promise<number> {
   try {
-    const supabase = getSupabaseClient();
+    const supabase = getSupabaseAdminClient();
     const { data, error } = await supabase
       .from('agent_memories')
       .delete()
@@ -261,7 +261,7 @@ export async function cleanExpiredMemories(agentUsername: string): Promise<numbe
  */
 export async function saveSessionState(state: Omit<SessionState, 'created_at' | 'updated_at'>): Promise<boolean> {
   try {
-    const supabase = getSupabaseClient();
+    const supabase = getSupabaseAdminClient();
     const { error } = await supabase
       .from('agent_session_states')
       .upsert({
@@ -290,7 +290,7 @@ export async function saveSessionState(state: Omit<SessionState, 'created_at' | 
  */
 export async function loadSessionState(sessionId: string, agentUsername: string): Promise<SessionState | null> {
   try {
-    const supabase = getSupabaseClient();
+    const supabase = getSupabaseAdminClient();
     const { data, error } = await supabase
       .from('agent_session_states')
       .select('*')

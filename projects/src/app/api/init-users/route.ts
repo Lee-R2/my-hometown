@@ -1,6 +1,6 @@
 import { requireAdmin, authError, safeError } from '@/lib/api-auth';
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import { hashPassword } from '@/lib/security';
 import { ApiErrors } from '@/lib/api-error';
 
@@ -15,10 +15,10 @@ import { ApiErrors } from '@/lib/api-error';
 export async function GET(request: NextRequest) {
   try {
     // 安全修复：强制管理员鉴权
-    const auth = requireAdmin(request);
+    const auth = await requireAdmin(request);
     if (!auth.authenticated) return authError(auth);
 
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
     const { data: users, error } = await client
       .from('users')
       .select('id, username, name, role, school_id, is_active, created_at')
@@ -46,10 +46,10 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     // 安全修复：无条件要求管理员鉴权，不再根据用户表是否为空绕过
-    const auth = requireAdmin(request);
+    const auth = await requireAdmin(request);
     if (!auth.authenticated) return authError(auth);
 
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
 
     // 默认测试用户
     const defaultUsers = [

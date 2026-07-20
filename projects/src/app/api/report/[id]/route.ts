@@ -1,255 +1,250 @@
 import { requireAdmin, authError, safeError } from '@/lib/api-auth';
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
+import { RoleConfig, RoleType, DEFAULT_ROLE_CONFIGS, MODULES } from '@/lib/permissions';
 import { ApiErrors } from '@/lib/api-error';
 
-export const dynamic = 'force-dynamic';
-
-/**
- * 获取任务主题报告数据（公开可访问，无需登录）
- * 通过 theme_completion 的 id 查询
- */
-export async function GET(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const auth = requireAdmin(request);
+export async function GET(request: NextRequest) {
+  const auth = await requireAdmin(request);
   if (!auth.authenticated) return authError(auth);
 
   try {
-    const { id: completionId } = await params;
-    if (!completionId) {
-      return ApiErrors.validation('缺少报告ID');
-    }
-
-    const client = getSupabaseClient();
-
-    // 1. 获取主题完成记录
-    const { data: completion, error: completionError } = await client
-      .from('theme_completions')
-      .select('id, team_id, theme_id, completed_at, total_points, total_rewards, total_tasks, cycle')
-      .eq('id', completionId)
-      .single();
-
-    if (completionError || !completion) {
-      return ApiErrors.notFound('报告不存在');
-    }
-
-    // 2. 获取小队信息
-    const { data: team } = await client
-      .from('teams')
-      .select('id, name, slogan')
-      .eq('id', completion.team_id)
-      .single();
-
-    // 3. 获取主题信息
-    const { data: theme } = await client
-      .from('task_themes')
-      .select('id, name, icon, description')
-      .eq('id', completion.theme_id)
-      .single();
-
-    // 4. 获取该主题下所有任务
-    const { data: tasks } = await client
-      .from('tasks')
-      .select('id, title, task_type, stage, points')
-      .eq('theme_id', completion.theme_id);
-
-    const allTasks = tasks || [];
-    const mainTasks = allTasks.filter(t => t.task_type === 'main' || !t.task_type);
-    const sideTasks = allTasks.filter(t => t.task_type === 'side');
-    const finalTasks = allTasks.filter(t => t.task_type === 'final');
-
-    // 5. 获取小队在该周期内的所有提交
-    const { data: submissions } = await client
-      .from('task_submissions')
-      .select('id, task_id, status, rating, file_urls, content, created_at')
-      .eq('team_id', completion.team_id)
-      .eq('cycle', completion.cycle);
-
-    const allSubmissions = submissions || [];
-
-    // 6. 统计提交状态
-    const approvedSubmissions = allSubmissions.filter(s => s.status === 'approved');
-    const rejectedSubmissions = allSubmissions.filter(s => s.status === 'rejected');
-    const pendingSubmissions = allSubmissions.filter(s => s.status === 'pending');
-    const excellentSubmissions = allSubmissions.filter(s => s.status === 'approved' && s.rating === 'excellent');
-
-    // 计算完成任务数（有approved提交的任务）
-    const completedTaskIds = new Set(approvedSubmissions.map(s => s.task_id));
-    const completedTaskCount = allTasks.filter(t => completedTaskIds.has(t.id)).length;
-
-    // 7. 获取点赞数
-    const { count: likesCount } = await client
-      .from('likes')
-      .select('*', { count: 'exact', head: true })
-      .eq('to_team_id', completion.team_id);
-
-    // 8. 获取宝石碎片（从 teams 表读取权威值）
-    const { data: teamForGems } = await client
-      .from('teams')
-      .select('heart_shards, heart_gems')
-      .eq('id', completion.team_id)
-      .maybeSingle();
-
-    // 9. 获取徽章数
-    const { count: badgeCount } = await client
-      .from('user_rewards')
-      .select('*, rewards!inner(type)', { count: 'exact', head: true })
-      .eq('team_id', completion.team_id)
-      .eq('rewards.type', 'badge');
-
-    // 用另一种方式统计，因为 head:true 不支持 join 过滤
-    const { data: badgeRewards } = await client
-      .from('user_rewards')
-      .select('reward_id, rewards(type)')
-      .eq('team_id', completion.team_id);
-    const badgeCountValue = (badgeRewards || []).filter(r => {
-      const reward = Array.isArray(r.rewards) ? r.rewards[0] : r.rewards;
-      return reward?.type === 'badge';
-    }).length;
-
-    // 10. 获取技能卡数
-    const skillCardCount = (badgeRewards || []).filter(r => {
-      const reward = Array.isArray(r.rewards) ? r.rewards[0] : r.rewards;
-      return reward?.type === 'skill_card';
-    }).length;
-
-    // 11. 从小队产出中选出2-3个截图展示（优先选优秀的，再补充其他已通过的）
-    const approvedWithImages = approvedSubmissions
-      .filter(s => {
-        const urls: string[] = s.file_urls ? (typeof s.file_urls === 'string' ? JSON.parse(s.file_urls) : s.file_urls) : [];
-        return urls.length > 0;
-      });
-
-    // 排序：优秀的排前面，再按创建时间倒序
-    const sortedForShow = [...approvedWithImages].sort((a, b) => {
-      if (a.rating === 'excellent' && b.rating !== 'excellent') return -1;
-      if (a.rating !== 'excellent' && b.rating === 'excellent') return 1;
-      return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
-    }).slice(0, 3);
-
-    // 收集产出截图
-    const excellentWorks: Array<{
-      submissionId: string;
-      taskTitle: string;
-      imageUrl: string;
-      rating: string | null;
-    }> = [];
-
-    for (const sub of sortedForShow) {
-      const urls: string[] = sub.file_urls ? (typeof sub.file_urls === 'string' ? JSON.parse(sub.file_urls) : sub.file_urls) : [];
-      const task = allTasks.find(t => t.id === sub.task_id);
-      if (urls.length > 0) {
-        excellentWorks.push({
-          submissionId: sub.id,
-          taskTitle: task?.title || '未知任务',
-          imageUrl: urls[0],
-          rating: sub.rating,
+    const client = getSupabaseAdminClient();
+    const { searchParams } = new URL(request.url);
+    const role = searchParams.get('role') as RoleType | null;
+    
+    if (role) {
+      const { data, error } = await client
+        .from('role_permissions')
+        .select('config, updated_at')
+        .eq('role', role)
+        .single();
+      
+      if (error) {
+        const defaultConfig = DEFAULT_ROLE_CONFIGS.find(c => c.role === role);
+        const allModulePermissions = MODULES.map(m => ({
+          moduleId: m.id,
+          level: defaultConfig?.permissions?.find((p: any) => p.moduleId === m.id)?.level || 'none'
+        }));
+        return NextResponse.json({
+          success: true,
+          config: defaultConfig ? {
+            ...defaultConfig,
+            permissions: allModulePermissions
+          } : null,
+          updatedAt: null,
         });
       }
+      
+      const dbConfig = data.config || {};
+      const allModulePermissions = MODULES.map(m => ({
+        moduleId: m.id,
+        level: dbConfig.permissions?.find((p: any) => p.moduleId === m.id)?.level || 'none'
+      }));
+      
+      return NextResponse.json({
+        success: true,
+        config: {
+          role: role,
+          name: dbConfig.name || role,
+          description: dbConfig.description || '',
+          dataScope: dbConfig.dataScope || 'all',
+          permissions: allModulePermissions
+        },
+        updatedAt: data.updated_at,
+      });
+    } else {
+      const { data, error } = await client
+        .from('role_permissions')
+        .select('role, config, updated_at');
+      
+      if (error) {
+        console.error('获取权限配置失败:', error);
+        const configsWithAllModules = DEFAULT_ROLE_CONFIGS.map(config => {
+          const allModulePermissions = MODULES.map(m => ({
+            moduleId: m.id,
+            level: config.permissions?.find((p: any) => p.moduleId === m.id)?.level || 'none'
+          }));
+          return { ...config, permissions: allModulePermissions };
+        });
+        return NextResponse.json({
+          success: true,
+          configs: configsWithAllModules,
+          updatedAt: null,
+        });
+      }
+      
+      const configs: RoleConfig[] = data.map(item => {
+        const config = item.config || {};
+        const defaultConfig = DEFAULT_ROLE_CONFIGS.find(c => c.role === item.role);
+        const allModulePermissions = MODULES.map(m => {
+          const dbLevel = config.permissions?.find((p: any) => p.moduleId === m.id)?.level;
+          const defaultLevel = defaultConfig?.permissions?.find((p: any) => p.moduleId === m.id)?.level;
+          return {
+            moduleId: m.id,
+            level: dbLevel || defaultLevel || 'none'
+          };
+        });
+
+        return {
+          role: item.role as RoleType,
+          name: config.name || defaultConfig?.name || item.role,
+          description: config.description || defaultConfig?.description || '',
+          dataScope: config.dataScope || defaultConfig?.dataScope || 'all',
+          permissions: allModulePermissions
+        };
+      });
+      
+      const updatedAt = data.reduce((max: string | null, item: any) => {
+        if (!item.updated_at) return max;
+        if (!max) return item.updated_at;
+        return new Date(item.updated_at) > new Date(max) ? item.updated_at : max;
+      }, null);
+      
+      return NextResponse.json({
+        success: true,
+        configs,
+        updatedAt,
+      });
+    }
+  } catch (error) {
+    console.error('获取权限配置失败:', error);
+    return ApiErrors.validation('获取权限配置失败');
+  }
+}
+
+export async function POST(request: NextRequest) {
+  const auth = await requireAdmin(request);
+  if (!auth.authenticated) return authError(auth);
+
+  try {
+    const client = getSupabaseAdminClient();
+    const body = await request.json();
+    const { role, config } = body;
+    
+    if (!role || !config) {
+      return ApiErrors.validation('缺少必要参数');
+    }
+    
+    const validRoles: RoleType[] = ['super_admin', 'admin', 'volunteer', 'teacher'];
+    if (!validRoles.includes(role)) {
+      return ApiErrors.validation('无效的角色');
     }
 
-    // 12. 获取最后任务表单的话语
-    let finalTaskQuotes: string[] = [];
-    if (finalTasks.length > 0) {
-      const finalTaskIds = finalTasks.map(t => t.id);
-      const { data: finalSubmissions } = await client
-        .from('final_task_submissions')
-        .select('form_data')
-        .eq('team_id', completion.team_id)
-        .eq('cycle', completion.cycle)
-        .in('task_id', finalTaskIds);
+    // 仅 super_admin 可修改 super_admin 角色的权限配置
+    if (role === 'super_admin' && auth.payload!.role !== 'super_admin') {
+      return ApiErrors.forbidden('仅超级管理员可修改超级管理员权限配置');
+    }
 
-      if (finalSubmissions && finalSubmissions.length > 0) {
-        const allTexts: string[] = [];
-        for (const fs of finalSubmissions) {
-          const formData = fs.form_data;
-          if (formData && typeof formData === 'object') {
-            // 提取所有文本值（跳过空值和太短的值）
-            Object.values(formData as Record<string, unknown>).forEach(val => {
-              if (typeof val === 'string' && val.trim().length >= 5) {
-                allTexts.push(val.trim());
-              }
-            });
-          }
-        }
-        // 随机取3句
-        finalTaskQuotes = allTexts.sort(() => Math.random() - 0.5).slice(0, 3);
+    const { permissions, dataScope } = config;
+    if (!Array.isArray(permissions)) {
+      return ApiErrors.validation('权限配置格式错误');
+    }
+    
+    const validModuleIds = MODULES.map(m => m.id);
+    for (const p of permissions) {
+      if (!validModuleIds.includes(p.moduleId)) {
+        return NextResponse.json({ error: `无效的模块ID: ${p.moduleId}` }, { status: 400 });
       }
     }
-
-    // 13. 获取小队成员
-    const { data: members } = await client
-      .from('team_members')
-      .select('id, name, role')
-      .eq('team_id', completion.team_id);
-
-    // 构建报告数据
-    const report = {
-      completion: {
-        id: completion.id,
-        completedAt: completion.completed_at,
-        totalPoints: completion.total_points,
-        totalTasks: completion.total_tasks,
-        cycle: completion.cycle,
-      },
-      team: {
-        id: team?.id,
-        name: team?.name || '未知小队',
-        slogan: team?.slogan || '',
-        icon: '🚀',
-        members: (members || []).map(m => ({
-          name: m.name,
-          role: m.role,
-        })),
-      },
-      theme: {
-        id: theme?.id,
-        name: theme?.name || '未知主题',
-        icon: theme?.icon || '🎯',
-        description: theme?.description || '',
-      },
-      // 基础数据
-      stats: {
-        totalPoints: completion.total_points,
-        likesReceived: likesCount || 0,
-        gemFragments: teamForGems?.heart_shards || 0,
-        gems: teamForGems?.heart_gems || 0,
-        badgeCount: badgeCountValue,
-        skillCardCount: skillCardCount,
-      },
-      // 图表数据
-      charts: {
-        // 任务完成比例
-        taskCompletion: {
-          completed: completedTaskCount,
-          total: allTasks.length,
-          percentage: allTasks.length > 0 ? Math.round((completedTaskCount / allTasks.length) * 100) : 0,
+    
+    const { error } = await client
+      .from('role_permissions')
+      .upsert({
+        role,
+        config: {
+          name: config.name,
+          description: config.description,
+          dataScope: dataScope,
+          permissions,
         },
-        // 主线/支线任务比例
-        taskTypeRatio: {
-          main: mainTasks.length,
-          side: sideTasks.length,
-          final: finalTasks.length,
-        },
-        // 审核结果比例
-        reviewRatio: {
-          excellent: excellentSubmissions.length,
-          approved: approvedSubmissions.filter(s => s.rating !== 'excellent').length,
-          rejected: rejectedSubmissions.length,
-          pending: pendingSubmissions.length,
-        },
-      },
-      // 优秀产出
-      excellentWorks,
-      // 最后任务话语
-      finalTaskQuotes,
-    };
-
-    return NextResponse.json({ report });
+        updated_at: new Date().toISOString(),
+        updated_by: auth.payload!.userId,
+      }, {
+        onConflict: 'role',
+      });
+    
+    if (error) {
+      console.error('保存权限配置失败:', error);
+      return ApiErrors.validation('保存权限配置失败');
+    }
+    
+    return NextResponse.json({
+      success: true,
+      message: '权限配置已保存',
+    });
   } catch (error) {
-    console.error('获取任务报告错误:', error);
-    return ApiErrors.validation('获取报告失败');
+    console.error('保存权限配置失败:', error);
+    return ApiErrors.validation('保存权限配置失败');
+  }
+}
+
+export async function DELETE(request: NextRequest) {
+  const auth = await requireAdmin(request);
+  if (!auth.authenticated) return authError(auth);
+
+  try {
+    const client = getSupabaseAdminClient();
+    const { searchParams } = new URL(request.url);
+    const role = searchParams.get('role') as RoleType | null;
+    
+    if (role) {
+      const defaultConfig = DEFAULT_ROLE_CONFIGS.find(c => c.role === role);
+      if (!defaultConfig) {
+        return ApiErrors.notFound('找不到默认配置');
+      }
+      
+      const { error } = await client
+        .from('role_permissions')
+        .upsert({
+          role,
+          config: {
+            name: defaultConfig.name,
+            description: defaultConfig.description,
+            dataScope: defaultConfig.dataScope,
+            permissions: defaultConfig.permissions,
+          },
+          updated_at: new Date().toISOString(),
+        }, {
+          onConflict: 'role',
+        });
+      
+      if (error) {
+        console.error('恢复默认配置失败:', error);
+        return ApiErrors.validation('恢复默认配置失败');
+      }
+      
+      return NextResponse.json({
+        success: true,
+        message: '已恢复默认配置',
+        config: defaultConfig,
+      });
+    } else {
+      for (const defaultConfig of DEFAULT_ROLE_CONFIGS) {
+        await client
+          .from('role_permissions')
+          .upsert({
+            role: defaultConfig.role,
+            config: {
+              name: defaultConfig.name,
+              description: defaultConfig.description,
+              dataScope: defaultConfig.dataScope,
+              permissions: defaultConfig.permissions,
+            },
+            updated_at: new Date().toISOString(),
+          }, {
+            onConflict: 'role',
+          });
+      }
+      
+      return NextResponse.json({
+        success: true,
+        message: '已恢复所有默认配置',
+        configs: DEFAULT_ROLE_CONFIGS,
+      });
+    }
+  } catch (error) {
+    console.error('恢复默认配置失败:', error);
+    return ApiErrors.validation('恢复默认配置失败');
   }
 }

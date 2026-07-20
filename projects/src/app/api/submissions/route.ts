@@ -1,6 +1,5 @@
-import { requireAnyAuth, requireAdminOrVolunteer, requireTeam, authError, safeError } from '@/lib/api-auth';
+import { requireAnyAuth, requireAdminOrVolunteer, requireTeam, authError, safeError, getAuthenticatedClient } from '@/lib/api-auth';
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
 import { generateSignedUrl } from '@/lib/storage-utils';
 import { supabaseErrorResponse, ApiErrors } from '@/lib/api-error';
 
@@ -8,11 +7,11 @@ import { supabaseErrorResponse, ApiErrors } from '@/lib/api-error';
  * 创建任务产出提交
  */
 export async function POST(request: NextRequest) {
-  const auth = requireTeam(request);
+  const auth = await requireTeam(request);
   if (!auth.authenticated) return authError(auth);
 
   try {
-    const client = getSupabaseClient();
+    const client = getAuthenticatedClient(request, auth);
     const body = await request.json();
     
     const { teamId, taskId, content, fileUrls, fileKeys, fileNames, fileSizes, fileTypes } = body;
@@ -188,42 +187,44 @@ export async function POST(request: NextRequest) {
  * 支持筛选：status（状态）、themeId（主题）、schoolId（学校）、createdBy（志愿者筛选）
  */
 export async function GET(request: NextRequest) {
-  const auth = requireAnyAuth(request);
+  const auth = await requireAnyAuth(request);
   if (!auth.authenticated) return authError(auth);
 
   try {
-    const client = getSupabaseClient();
+    const client = getAuthenticatedClient(request, auth);
     const { searchParams } = new URL(request.url);
     
     const status = searchParams.get('status'); // pending, approved, rejected, excellent, all
     const themeId = searchParams.get('themeId');
     const schoolId = searchParams.get('schoolId');
     const teamId = searchParams.get('teamId');
-    const createdBy = searchParams.get('createdBy'); // 志愿者筛选：只显示其指导的小队
-    const role = searchParams.get('role'); // 用户角色
+    // LE-A14: 强制使用认证身份,防止客户端伪造 role/createdBy 查看他人提交
+    const createdBy = auth.payload!.userId; // 志愿者/老师筛选：只显示其指导的小队
+    const role = auth.payload!.role; // 用户角色
 
     // 获取关联的小队信息（先筛选小队）
     let teamQuery = client
       .from('teams')
       .select('id, code, name, school_id, current_theme_id, assigned_volunteer_id, teacher_id');
-    
+
     // 小队查询自己的记录
-    if (teamId && !createdBy) {
-      teamQuery = teamQuery.eq('id', teamId);
+    if (teamId && (role === 'team')) {
+      // LE-A14: 小队身份强制使用认证 userId,防止查看其他小队
+      teamQuery = teamQuery.eq('id', auth.payload!.userId);
     }
     // 志愿者只能看到自己创建的小队的提交
-    else if (createdBy && role === 'volunteer') {
+    else if (role === 'volunteer') {
       teamQuery = teamQuery.eq('assigned_volunteer_id', createdBy);
     }
     // 助学老师能看到本校所有小队的提交（包括志愿者创建的）
-    else if (createdBy && role === 'teacher') {
+    else if (role === 'teacher') {
       // 先获取助学老师的学校
       const { data: teacherData } = await client
         .from('users')
         .select('school_id')
         .eq('id', createdBy)
         .single();
-      
+
       if (teacherData?.school_id) {
         // 查询该校所有小队
         teamQuery = teamQuery.eq('school_id', teacherData.school_id);
@@ -231,6 +232,10 @@ export async function GET(request: NextRequest) {
         // 如果没有学校信息，只显示自己对接的小队
         teamQuery = teamQuery.eq('teacher_id', createdBy);
       }
+    }
+    // admin/super_admin 可以指定 teamId 查看
+    else if (teamId && (role === 'admin' || role === 'super_admin')) {
+      teamQuery = teamQuery.eq('id', teamId);
     }
     
     const { data: teams } = await teamQuery;

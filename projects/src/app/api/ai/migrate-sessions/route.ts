@@ -1,6 +1,6 @@
 import { requireAdmin, authError, safeError } from '@/lib/api-auth';
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 
 /**
  * 迁移旧的随机 sessionId 为固定格式
@@ -8,11 +8,11 @@ import { getSupabaseClient } from '@/storage/database/supabase-client';
  * 新的格式: yinhe_team_{teamId}
  */
 export async function POST(request: NextRequest) {
-  const auth = requireAdmin(request);
+  const auth = await requireAdmin(request);
   if (!auth.authenticated) return authError(auth);
 
   try {
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
     const results = {
       updated_conversations: 0,
       updated_sessions: 0,
@@ -155,7 +155,7 @@ export async function POST(request: NextRequest) {
  */
 export async function GET() {
   try {
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
 
     // 统计各智能体的会话和对话数量
     const { data: sessions, error } = await client

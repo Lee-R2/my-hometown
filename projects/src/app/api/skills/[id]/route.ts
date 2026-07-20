@@ -1,150 +1,223 @@
-import { requireAdminOrVolunteer, authError, safeError } from '@/lib/api-auth';
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
-import { supabaseErrorResponse, ApiErrors } from '@/lib/api-error';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
+import { hashPassword } from '@/lib/security';
+import { requireAdminOrVolunteer, requireAdmin, authError, safeError } from '@/lib/api-auth';
+import { ApiErrors } from '@/lib/api-error';
 
-// 获取单个技能详情（包含关联的工具）
-export async function GET(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const auth = requireAdminOrVolunteer(request);
-  if (!auth.authenticated) return authError(auth);
-
+// 获取学校列表
+export async function GET(request: NextRequest) {
   try {
-    const { id } = await params;
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
+    const { searchParams } = new URL(request.url);
+    
+    const province = searchParams.get('province');
+    const city = searchParams.get('city');
+    const county = searchParams.get('county');
+    const keyword = searchParams.get('keyword');
+    const volunteerId = searchParams.get('volunteerId'); // 志愿者筛选
+    const schoolId = searchParams.get('schoolId'); // 直接按学校ID筛选
 
-    // 获取技能信息
-    const { data: skill, error } = await client
-      .from('skills')
-      .select('*')
-      .eq('id', id)
-      .single();
+    // 如果是志愿者筛选，先获取志愿者的学校信息
+    if (volunteerId && !schoolId) {
+      const { data: volunteer } = await client
+        .from('users')
+        .select('school_id')
+        .eq('id', volunteerId)
+        .single();
+      
+      if (volunteer?.school_id) {
+        // 使用志愿者的学校ID进行筛选
+        const schoolRes = await client
+          .from('schools')
+          .select('*')
+          .eq('id', volunteer.school_id)
+          .single();
+        
+        if (schoolRes.data) {
+          // 获取学校统计信息
+          const { count: teamCount } = await client
+            .from('teams')
+            .select('*', { count: 'exact', head: true })
+            .eq('school_id', schoolRes.data.id);
 
-    if (error || !skill) {
-      return ApiErrors.notFound('技能不存在');
+          const { count: adminCount } = await client
+            .from('users')
+            .select('*', { count: 'exact', head: true })
+            .eq('school_id', schoolRes.data.id)
+            .in('role', ['teacher', 'admin']);
+
+          return NextResponse.json({
+            success: true,
+            schools: [{
+              ...schoolRes.data,
+              teamCount: teamCount || 0,
+              adminCount: adminCount || 0,
+            }],
+          });
+        }
+      }
+      
+      // 志愿者没有分配学校
+      return NextResponse.json({
+        success: true,
+        schools: [],
+      });
     }
 
-    // 获取关联的工具
-    const { data: skillTools } = await client
-      .from('tool_skills')
-      .select(`
-        id,
-        is_auto_add,
-        tools (
-          id,
-          name,
-          description,
-          icon,
-          category,
-          image_url
-        )
-      `)
-      .eq('skill_id', id);
+    let query = client
+      .from('schools')
+      .select('*')
+      .order('created_at', { ascending: false });
 
-    return NextResponse.json({ 
-      skill: {
-        ...skill,
-        linkedTools: skillTools || [],
-      }
+    // 直接按学校ID筛选
+    if (schoolId) {
+      query = query.eq('id', schoolId);
+    }
+
+    // 按省筛选
+    if (province && province !== 'all') {
+      query = query.eq('province', province);
+    }
+
+    // 按市筛选
+    if (city && city !== 'all') {
+      query = query.eq('city', city);
+    }
+
+    // 按县筛选
+    if (county && county !== 'all') {
+      query = query.eq('county', county);
+    }
+
+    // 关键词搜索
+    if (keyword && keyword.trim()) {
+      query = query.or(`name.ilike.%${keyword.trim()}%,address.ilike.%${keyword.trim()}%`);
+    }
+
+    const { data: schools, error } = await query;
+
+    if (error) {
+      console.error('获取学校列表失败:', error);
+      return ApiErrors.validation('获取学校列表失败');
+    }
+
+    // 获取每个学校的小队数量和管理员数量
+    const schoolsWithStats = await Promise.all(
+      (schools || []).map(async (school) => {
+        const { count: teamCount } = await client
+          .from('teams')
+          .select('*', { count: 'exact', head: true })
+          .eq('school_id', school.id);
+
+        const { count: adminCount } = await client
+          .from('users')
+          .select('*', { count: 'exact', head: true })
+          .eq('school_id', school.id)
+          .in('role', ['teacher', 'admin']);
+
+        return {
+          ...school,
+          teamCount: teamCount || 0,
+          adminCount: adminCount || 0,
+        };
+      })
+    );
+
+    return NextResponse.json({
+      success: true,
+      schools: schoolsWithStats,
     });
   } catch (error) {
-    console.error('获取技能详情错误:', error);
-    return ApiErrors.validation('获取技能详情失败');
+    console.error('获取学校列表错误:', error);
+    return ApiErrors.validation('获取学校列表失败');
   }
 }
 
-// 更新技能
-export async function PUT(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const auth = requireAdminOrVolunteer(request);
+// 创建学校
+export async function POST(request: NextRequest) {
+  const auth = await requireAdmin(request);
   if (!auth.authenticated) return authError(auth);
-
   try {
-    const { id } = await params;
     const body = await request.json();
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
 
-    const updateData: Record<string, any> = {};
+    const { name, address, teacherName, teacherPhone, province, city, county } = body;
 
-    if (body.name !== undefined) updateData.name = body.name;
-    if (body.description !== undefined) updateData.description = body.description;
-    if (body.icon !== undefined) updateData.icon = body.icon;
-    if (body.category !== undefined) updateData.category = body.category;
-    if (body.content !== undefined) updateData.content = body.content;
-    if (body.videoUrl !== undefined) updateData.video_url = body.videoUrl;
-    if (body.usage !== undefined) updateData.usage = body.usage;
-    if (body.learningMaterials !== undefined) updateData.learning_materials = body.learningMaterials;
-    if (body.isRequired !== undefined) updateData.is_required = body.isRequired;
+    if (!name) {
+      return ApiErrors.validation('学校名称不能为空');
+    }
 
-    const { data: skill, error } = await client
-      .from('skills')
-      .update(updateData)
-      .eq('id', id)
+    if (!teacherPhone) {
+      return ApiErrors.validation('老师手机号不能为空');
+    }
+
+    // 检查手机号是否已被使用
+    const { data: existingUser } = await client
+      .from('users')
+      .select('id, name')
+      .eq('username', teacherPhone)
+      .single();
+
+    if (existingUser) {
+      return ApiErrors.conflict(`该手机号已被使用，关联用户：${existingUser.name || teacherPhone}`);
+    }
+
+    // 创建学校
+    const { data: school, error: schoolError } = await client
+      .from('schools')
+      .insert({
+        name,
+        address,
+        teacher_name: teacherName,
+        teacher_phone: teacherPhone,
+        province: province || null,
+        city: city || null,
+        county: county || null,
+      })
       .select()
       .single();
 
-    if (error) {
-      return supabaseErrorResponse(error, '更新技能失败:');
+    if (schoolError) {
+      console.error('创建学校失败:', schoolError);
+      return ApiErrors.validation('创建学校失败');
     }
 
-    // 更新关联的工具
-    if (body.linkedTools !== undefined) {
-      // 先删除现有关联
-      await client
-        .from('tool_skills')
-        .delete()
-        .eq('skill_id', id);
+    // 创建管理员账号（使用手机号作为用户名，初始密码123456）
+    const { data: user, error: userError } = await client
+      .from('users')
+      .insert({
+        username: teacherPhone,
+        password: hashPassword('123456'),
+        name: teacherName || teacherPhone,
+        role: 'teacher',
+        school_id: school.id,
+      })
+      .select()
+      .single();
 
-      // 插入新关联
-      if (body.linkedTools.length > 0) {
-        const insertData = body.linkedTools.map((tool: any) => ({
-          tool_id: tool.toolId || tool.id,
-          skill_id: id,
-          is_auto_add: tool.isAutoAdd ?? true,
-        }));
-
-        await client
-          .from('tool_skills')
-          .insert(insertData);
-      }
+    if (userError) {
+      console.error('创建管理员账号失败:', userError);
+      // 回滚学校创建
+      await client.from('schools').delete().eq('id', school.id);
+      return ApiErrors.validation('创建管理员账号失败');
     }
 
-    return NextResponse.json({ success: true, skill });
+    return NextResponse.json({
+      success: true,
+      school: {
+        ...school,
+        teamCount: 0,
+        adminCount: 1,
+      },
+      admin: {
+        id: user.id,
+        username: user.username,
+        name: user.name,
+        role: user.role,
+      },
+    });
   } catch (error) {
-    console.error('更新技能错误:', error);
-    return ApiErrors.validation('更新技能失败');
-  }
-}
-
-// 删除技能（软删除）
-export async function DELETE(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const auth = requireAdminOrVolunteer(request);
-  if (!auth.authenticated) return authError(auth);
-
-  try {
-    const { id } = await params;
-    const client = getSupabaseClient();
-
-    // 软删除
-    const { error } = await client
-      .from('skills')
-      .update({ is_active: false })
-      .eq('id', id);
-
-    if (error) {
-      return supabaseErrorResponse(error, '删除技能失败');
-    }
-
-    return NextResponse.json({ success: true });
-  } catch (error) {
-    console.error('删除技能错误:', error);
-    return ApiErrors.validation('删除技能失败');
+    console.error('创建学校错误:', error);
+    return ApiErrors.validation('创建学校失败');
   }
 }

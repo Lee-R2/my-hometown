@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import * as XLSX from 'xlsx';
 import { requireAdminOrVolunteer, authError, safeError } from '@/lib/api-auth';
 import { ApiErrors } from '@/lib/api-error';
@@ -34,10 +34,10 @@ interface FieldColumn {
  * POST /api/admin/feedback/export
  */
 export async function POST(request: NextRequest) {
-  const auth = requireAdminOrVolunteer(request);
+  const auth = await requireAdminOrVolunteer(request);
   if (!auth.authenticated) return authError(auth);
   try {
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
     const body = await request.json();
     const { userId, userRole, schoolId, feedbackIds, formId, teamId } = body;
 

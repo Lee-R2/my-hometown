@@ -1,6 +1,6 @@
 import { requireAdmin, authError, safeError } from '@/lib/api-auth';
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 
 /**
  * 数据库诊断API
@@ -8,11 +8,11 @@ import { getSupabaseClient } from '@/storage/database/supabase-client';
  */
 
 export async function GET(request: NextRequest) {
-  const auth = requireAdmin(request);
+  const auth = await requireAdmin(request);
   if (!auth.authenticated) return authError(auth);
 
   try {
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
     const diagnostics = {
       tables: {} as Record<string, any>,
       users: {

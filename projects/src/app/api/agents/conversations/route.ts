@@ -1,6 +1,6 @@
 import { requireAdmin, authError, safeError } from '@/lib/api-auth';
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import { ApiErrors } from '@/lib/api-error';
 
 // 智能体白名单
@@ -8,7 +8,7 @@ const ALLOWED_AGENTS = ['yinshe_boshi', 'laxiang_zhushou'];
 
 // 添加对话消息
 export async function POST(request: NextRequest) {
-  const auth = requireAdmin(request);
+  const auth = await requireAdmin(request);
   if (!auth.authenticated) return authError(auth);
   try {
     const body = await request.json();
@@ -34,7 +34,14 @@ export async function POST(request: NextRequest) {
       return ApiErrors.validation('消息内容不能为空');
     }
 
-    const client = getSupabaseClient();
+    // LE-A09: 强制使用认证令牌中的身份,防止冒充其他用户写对话
+    const effectiveUserId = auth.payload!.userId;
+    if (auth.payload!.role !== 'super_admin' && userId && userId !== effectiveUserId) {
+      return ApiErrors.forbidden('无权为其他用户创建对话');
+    }
+    const finalUserId = (auth.payload!.role === 'super_admin' && userId) ? userId : effectiveUserId;
+
+    const client = getSupabaseAdminClient();
 
     // 更新会话的最后活动时间
     await client
@@ -50,7 +57,7 @@ export async function POST(request: NextRequest) {
       .from('agent_conversations')
       .insert({
         agent_username: agentUsername,
-        user_id: userId,
+        user_id: finalUserId,
         user_name: userName,
         session_id: sessionId,
         role,
@@ -75,7 +82,7 @@ export async function POST(request: NextRequest) {
 
 // 获取对话历史
 export async function GET(request: NextRequest) {
-  const auth = requireAdmin(request);
+  const auth = await requireAdmin(request);
   if (!auth.authenticated) return authError(auth);
 
   try {
@@ -96,7 +103,7 @@ export async function GET(request: NextRequest) {
       return ApiErrors.validation('缺少会话ID');
     }
 
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
     // VULN-AI-015 修复：附加 user_id 过滤条件，确保只能查到属于该用户的对话历史
     // 超级管理员(super_admin)可选不传 userId 以支持跨用户管理；其他角色必须传 userId 自我限定
     const currentRole = auth.payload?.role;

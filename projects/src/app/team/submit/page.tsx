@@ -16,6 +16,7 @@ import {
 import { toast } from 'sonner';
 import { useScrollPosition } from '@/hooks/use-scroll-position';
 import { SubmissionReviewDialog } from '@/components/submission-review-dialog';
+import { safeGetJSON, safeJSONParse } from '@/lib/utils';
 
 interface Team {
   id: string;
@@ -92,8 +93,7 @@ function saveDraftFiles(taskId: string, files: UploadedFile[]) {
       // 不存储 url，因为签名URL会过期，需要时重新生成
     }));
     
-    const drafts = localStorage.getItem(DRAFT_STORAGE_KEY);
-    const allDrafts = drafts ? JSON.parse(drafts) : {};
+    const allDrafts = safeGetJSON(DRAFT_STORAGE_KEY, {} as any);
     allDrafts[taskId] = simplifiedFiles;
     
     const dataStr = JSON.stringify(allDrafts);
@@ -198,7 +198,7 @@ export default function SubmitPage() {
       return;
     }
     
-    const teamObj = JSON.parse(teamData);
+    const teamObj = safeJSONParse(teamData, {} as any);
     setTeam({
       ...teamObj,
       currentTaskId: teamObj.current_task_id || teamObj.currentTaskId,
@@ -604,8 +604,8 @@ export default function SubmitPage() {
               <div className="bg-blue-50 rounded-lg p-4">
                 <h4 className="text-sm font-semibold mb-2 text-blue-700">任务要求：</h4>
                 <ul className="text-sm text-gray-600 space-y-1">
-                  {(typeof task.requirements === 'string' 
-                    ? JSON.parse(task.requirements) 
+                  {(typeof task.requirements === 'string'
+                    ? safeJSONParse(task.requirements, [])
                     : task.requirements).map((req: string, idx: number) => (
                     <li key={idx} className="flex items-start gap-2">
                       <span className="text-blue-500">•</span>

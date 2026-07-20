@@ -1,6 +1,6 @@
 import { requireAnyAuth, authError, safeError } from '@/lib/api-auth';
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import { ApiErrors } from '@/lib/api-error';
 
 /**
@@ -18,7 +18,7 @@ export async function PATCH(request: NextRequest) {
       return ApiErrors.validation('缺少必要参数');
     }
 
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
     const now = new Date().toISOString();
 
     if (action === 'read') {
@@ -74,7 +74,7 @@ export async function PATCH(request: NextRequest) {
 
 // 获取提醒列表
 export async function GET(request: NextRequest) {
-  const auth = requireAnyAuth(request);
+  const auth = await requireAnyAuth(request);
   if (!auth.authenticated) return authError(auth);
 
   try {
@@ -83,7 +83,7 @@ export async function GET(request: NextRequest) {
     const priority = searchParams.get('priority');  // high, normal, low
     const limit = parseInt(searchParams.get('limit') || '20');
 
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
     
     let query = client
       .from('agent_reminders')

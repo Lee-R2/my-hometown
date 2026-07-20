@@ -1,14 +1,14 @@
 import { requireAnyAuth, requireAdminOrVolunteer, authError, safeError } from '@/lib/api-auth';
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import { supabaseErrorResponse, ApiErrors } from '@/lib/api-error';
 
 export async function GET(request: NextRequest) {
-  const auth = requireAnyAuth(request);
+  const auth = await requireAnyAuth(request);
   if (!auth.authenticated) return authError(auth);
 
   try {
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
     const { searchParams } = new URL(request.url);
     const themeId = searchParams.get('themeId');
     const stage = searchParams.get('stage');
@@ -64,7 +64,7 @@ export async function GET(request: NextRequest) {
 
 // 检查用户是否有权限操作主题下的任务
 async function checkTaskPermission(
-  client: ReturnType<typeof getSupabaseClient>,
+  client: ReturnType<typeof getSupabaseAdminClient>,
   themeId: string,
   userId: string,
   userRole: string
@@ -115,12 +115,12 @@ async function checkTaskPermission(
 }
 
 export async function POST(request: NextRequest) {
-  const auth = requireAdminOrVolunteer(request);
+  const auth = await requireAdminOrVolunteer(request);
   if (!auth.authenticated) return authError(auth);
 
   try {
     const body = await request.json();
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
 
     // 权限验证：身份从认证令牌获取，防止客户端伪造
     const userId = auth.payload!.userId;

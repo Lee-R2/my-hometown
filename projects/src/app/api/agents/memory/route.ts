@@ -1,6 +1,6 @@
 import { requireAdmin, authError, safeError } from '@/lib/api-auth';
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import { ApiErrors } from '@/lib/api-error';
 
 // 智能体白名单
@@ -8,7 +8,7 @@ const ALLOWED_AGENTS = ['yinshe_boshi', 'laxiang_zhushou'];
 
 // 添加记忆
 export async function POST(request: NextRequest) {
-  const auth = requireAdmin(request);
+  const auth = await requireAdmin(request);
   if (!auth.authenticated) return authError(auth);
 
   try {
@@ -31,7 +31,7 @@ export async function POST(request: NextRequest) {
       return ApiErrors.validation('记忆内容不能为空');
     }
 
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
 
     // 检查是否已存在相同的记忆（避免重复）
     if (contextKey && contextValue) {
@@ -99,7 +99,7 @@ export async function POST(request: NextRequest) {
 
 // 获取记忆列表
 export async function GET(request: NextRequest) {
-  const auth = requireAdmin(request);
+  const auth = await requireAdmin(request);
   if (!auth.authenticated) return authError(auth);
 
   try {
@@ -117,7 +117,7 @@ export async function GET(request: NextRequest) {
       return ApiErrors.validation('无效的智能体');
     }
 
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
     let query = client
       .from('agent_memories')
       .select('*')

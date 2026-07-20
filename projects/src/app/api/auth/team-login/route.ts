@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import { verifyPasswordAsync, hashPasswordAsync, needsRehash } from '@/lib/security';
 import { checkRateLimit, logRequest, getClientIP } from '@/lib/rate-limit';
 import { createSession, setSessionCookie } from '@/lib/session';
@@ -43,7 +43,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
 
     // 3. 查询小队（直接用 ilike 不区分大小写，省去 eq→ilike 双查询）
     let { data: team, error: teamError } = await client
@@ -59,8 +59,9 @@ export async function POST(request: NextRequest) {
         team: team,
       });
       await logRequest(ip, 'POST', '/api/auth/team-login', userAgent, undefined, 401);
+      // SEC-003: 统一错误消息,防止账号枚举(原本返回"小队编码不存在"会暴露小队是否注册)
       return NextResponse.json(
-        { error: '小队编码不存在', field: 'code' },
+        { error: '小队编码或密码错误', field: 'code' },
         { status: 401 }
       );
     }
@@ -69,8 +70,9 @@ export async function POST(request: NextRequest) {
     const isPasswordValid = await verifyPasswordAsync(password, team.password);
     if (!isPasswordValid) {
       await logRequest(ip, 'POST', '/api/auth/team-login', userAgent, team.id, 401);
+      // SEC-003: 统一错误消息,防止账号枚举
       return NextResponse.json(
-        { error: '密码错误', field: 'password' },
+        { error: '小队编码或密码错误', field: 'password' },
         { status: 401 }
       );
     }

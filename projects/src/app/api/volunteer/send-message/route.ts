@@ -1,6 +1,6 @@
 import { requireAdminOrVolunteer, authError, safeError } from '@/lib/api-auth';
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import { supabaseErrorResponse, ApiErrors } from '@/lib/api-error';
 
 /**
@@ -8,13 +8,13 @@ import { supabaseErrorResponse, ApiErrors } from '@/lib/api-error';
  * POST /api/volunteer/send-message
  */
 export async function POST(request: NextRequest) {
-  const auth = requireAdminOrVolunteer(request);
+  const auth = await requireAdminOrVolunteer(request);
   if (!auth.authenticated) return authError(auth);
 
   try {
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
     const body = await request.json();
-    const { teamId, title, content, senderName } = body;
+    const { teamId, title, content } = body;
 
     if (!teamId || !content) {
       return ApiErrors.validation('缺少必要参数');
@@ -57,10 +57,10 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // 发送通知
+    // LE-A20: 发送方显示名称从 DB 读取,不接受客户端传入的 senderName,防止伪造
     // 当发送者是助学老师时，使用"雾影博士"作为显示名称
-    const senderDisplayName = sender?.role === 'teacher' ? '雾影博士' : (senderName || undefined);
-    const notificationTitle = sender?.role === 'teacher' 
+    const senderDisplayName = sender?.role === 'teacher' ? '雾影博士' : (sender?.name || undefined);
+    const notificationTitle = sender?.role === 'teacher'
       ? '雾影博士发来消息'
       : (title || '志愿者老师发来消息');
 

@@ -1,6 +1,6 @@
 import { requireAnyAuth, authError, safeError } from '@/lib/api-auth';
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import { ApiErrors } from '@/lib/api-error';
 
 /**
@@ -20,7 +20,7 @@ import { ApiErrors } from '@/lib/api-error';
 
 // 查询小队的完整数据
 export async function GET(request: NextRequest) {
-  const auth = requireAnyAuth(request);
+  const auth = await requireAnyAuth(request);
   if (!auth.authenticated) return authError(auth);
 
   try {
@@ -32,7 +32,7 @@ export async function GET(request: NextRequest) {
       return ApiErrors.validation('缺少 teamId 参数');
     }
 
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
     const result: any = { success: true, teamId };
 
     // 记录数据访问

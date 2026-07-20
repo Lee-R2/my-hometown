@@ -1,188 +1,70 @@
-import { requireAnyAuth, requireAdminOrVolunteer, authError, safeError } from '@/lib/api-auth';
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
-import { supabaseErrorResponse, ApiErrors } from '@/lib/api-error';
+import { requireAnyAuth, authError } from '@/lib/api-auth';
 
-export async function GET(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const auth = requireAnyAuth(request);
+/**
+ * 数据同步状态接口
+ * 当前为 stub 实现：返回空状态，表示无更新
+ * 后续可扩展为基于 lastSync 时间戳查询各表变更数量
+ */
+
+export async function GET(request: NextRequest) {
+  // 安全:必须认证后才能查询同步状态,防止未授权用户枚举 teamId/userId 是否存在
+  const auth = await requireAnyAuth(request);
   if (!auth.authenticated) return authError(auth);
 
-  try {
-    const { id } = await params;
-    const client = getSupabaseClient();
+  const { searchParams } = new URL(request.url);
+  const teamId = searchParams.get('teamId');
+  const userId = searchParams.get('userId');
+  const userRole = searchParams.get('userRole');
+  const lastSync = searchParams.get('lastSync');
 
-    // 获取任务关联的技能
-    const { data: taskSkills, error } = await client
-      .from('task_skills')
-      .select(`
-        id,
-        points,
-        is_required,
-        created_at,
-        skills (
-          id,
-          name,
-          description,
-          icon,
-          category,
-          content,
-          video_url
-        )
-      `)
-      .eq('task_id', id);
-
-    if (error) {
-      return supabaseErrorResponse(error, '获取任务技能失败');
-    }
-
-    return NextResponse.json({ taskSkills: taskSkills || [] });
-  } catch (error) {
-    console.error('获取任务技能错误:', error);
-    return ApiErrors.validation('获取任务技能失败');
+  // 基础校验（兼容团队端与管理员端两种调用方式）
+  if (!teamId && !userId) {
+    return NextResponse.json(
+      { success: false, error: '缺少 teamId 或 userId 参数' },
+      { status: 400 }
+    );
   }
-}
 
-// 为任务添加技能
-export async function POST(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const auth = requireAdminOrVolunteer(request);
-  if (!auth.authenticated) return authError(auth);
-
-  try {
-    const { id } = await params;
-    const body = await request.json();
-    const client = getSupabaseClient();
-
-    // 检查是否已存在（幂等：已存在则直接返回成功）
-    const { data: existing } = await client
-      .from('task_skills')
-      .select('id, points, is_required')
-      .eq('task_id', id)
-      .eq('skill_id', body.skillId)
-      .single();
-
-    if (existing) {
-      // 已存在，返回成功（支持同步场景下的幂等调用）
-      return NextResponse.json({ success: true, taskSkill: existing, alreadyExists: true });
+  // 安全:校验查询参数与认证身份一致,防止枚举其他用户/小队
+  // admin/super_admin 可能查询任意小队/用户(管理后台用),其他角色只能查自己
+  const authRole = auth.payload!.role;
+  const authUserId = auth.payload!.userId;
+  if (authRole !== 'super_admin' && authRole !== 'admin') {
+    if (teamId && teamId !== authUserId) {
+      return NextResponse.json(
+        { success: false, error: '无权查询其他小队的同步状态' },
+        { status: 403 }
+      );
     }
-
-    const { data: taskSkill, error } = await client
-      .from('task_skills')
-      .insert({
-        task_id: id,
-        skill_id: body.skillId,
-        points: body.points || 5,
-        is_required: body.isRequired ?? true,
-      })
-      .select(`
-        id,
-        points,
-        is_required,
-        skills (
-          id,
-          name,
-          description,
-          icon,
-          category,
-          content
-        )
-      `)
-      .single();
-
-    if (error) {
-      return supabaseErrorResponse(error, '添加技能失败');
+    if (userId && userId !== authUserId) {
+      return NextResponse.json(
+        { success: false, error: '无权查询其他用户的同步状态' },
+        { status: 403 }
+      );
     }
-
-    return NextResponse.json({ success: true, taskSkill });
-  } catch (error) {
-    console.error('添加任务技能错误:', error);
-    return ApiErrors.validation('添加技能失败');
   }
-}
 
-// 批量更新任务技能
-export async function PUT(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  try {
-    const { id } = await params;
-    const body = await request.json();
-    const client = getSupabaseClient();
-
-    // 先删除现有技能
-    await client
-      .from('task_skills')
-      .delete()
-      .eq('task_id', id);
-
-    // 批量插入新技能
-    if (body.skills && body.skills.length > 0) {
-      const insertData = body.skills.map((skill: any) => ({
-        task_id: id,
-        skill_id: skill.skillId || skill.id,
-        points: skill.points || 5,
-        is_required: skill.isRequired ?? true,
-      }));
-
-      const { error } = await client
-        .from('task_skills')
-        .insert(insertData);
-
-      if (error) {
-        return supabaseErrorResponse(error, '更新技能失败');
-      }
-    }
-
-    return NextResponse.json({ success: true });
-  } catch (error) {
-    console.error('更新任务技能错误:', error);
-    return ApiErrors.validation('更新技能失败');
-  }
-}
-
-// 删除任务技能
-export async function DELETE(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  try {
-    const { id } = await params;
-    const { searchParams } = new URL(request.url);
-    const skillId = searchParams.get('skillId');
-    const client = getSupabaseClient();
-
-    if (!skillId) {
-      // 删除任务的所有技能
-      const { error } = await client
-        .from('task_skills')
-        .delete()
-        .eq('task_id', id);
-
-      if (error) {
-        return supabaseErrorResponse(error, '删除技能失败');
-      }
-    } else {
-      // 删除特定技能
-      const { error } = await client
-        .from('task_skills')
-        .delete()
-        .eq('task_id', id)
-        .eq('skill_id', skillId);
-
-      if (error) {
-        return supabaseErrorResponse(error, '删除技能失败');
-      }
-    }
-
-    return NextResponse.json({ success: true });
-  } catch (error) {
-    console.error('删除任务技能错误:', error);
-    return ApiErrors.validation('删除技能失败');
-  }
+  // stub：返回空状态，表示当前无更新
+  // 真正的同步逻辑可基于 lastSync 时间戳查询各表 updated_at > lastSync 的记录数
+  return NextResponse.json({
+    success: true,
+    hasUpdates: false,
+    changes: [],
+    status: {
+      teams: 0,
+      tasks: 0,
+      submissions: 0,
+      rewards: 0,
+      skills: 0,
+      tools: 0,
+      messages: 0,
+      members: 0,
+      user_rewards: 0,
+      task_themes: 0,
+      team_side_tasks: 0,
+      permissions: 0,
+    },
+    serverTime: Date.now(),
+  });
 }

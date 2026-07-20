@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import { safeError } from '@/lib/api-auth';
 import { checkRateLimit, getClientIP } from '@/lib/rate-limit';
 import { ApiErrors } from '@/lib/api-error';
@@ -36,7 +36,7 @@ export async function GET(request: NextRequest) {
       }, { status: 200 });
     }
 
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
 
     // 查询手机号是否已被使用
     let query = client

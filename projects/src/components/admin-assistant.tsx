@@ -161,17 +161,23 @@ export default function AdminAssistant({
   }, [isOpen]);
 
   // 清理音频资源
+  // 安全修复 LE-F02: 之前 cleanup 依赖 isRecording,当 isRecording 从 false→true 变化时,
+  // React 会先执行旧 effect 的 cleanup(此时 isRecording 还是旧值 false,不会 stop),
+  // 但当 isRecording 从 true→false 变化时,旧 effect 的 cleanup 会在 isRecording=true 时运行,
+  // 立即停止用户正在进行的录音。改为仅在组件卸载时清理,并直接检查 mediaRecorderRef.current.state。
   useEffect(() => {
     return () => {
       if (audioRef.current) {
         audioRef.current.pause();
         audioRef.current = null;
       }
-      if (mediaRecorderRef.current && isRecording) {
-        mediaRecorderRef.current.stop();
+      // 直接检查 MediaRecorder 实例的运行状态,而非依赖 React state
+      const recorder = mediaRecorderRef.current;
+      if (recorder && recorder.state !== 'inactive') {
+        recorder.stop();
       }
     };
-  }, [isRecording]);
+  }, []);
 
   // 文本转语音
   const speakText = async (text: string) => {
@@ -525,10 +531,16 @@ export default function AdminAssistant({
 
     try {
       // 构建历史消息
-      const history = messages.slice(-16).map(m => ({
-        role: m.role,
-        content: m.content
-      }));
+      // LE-M10: 限制历史为最近 10 条,且总字符数不超过 8000(与后端一致),防止上下文溢出
+      const recentMessages = messages.slice(-10);
+      let totalChars = 0;
+      const history = [];
+      for (let i = recentMessages.length - 1; i >= 0; i--) {
+        const m = recentMessages[i];
+        totalChars += (m.content?.length || 0);
+        if (totalChars > 8000) break;
+        history.unshift({ role: m.role, content: m.content });
+      }
 
       const response = await fetch('/api/admin/assistant', {
         method: 'POST',

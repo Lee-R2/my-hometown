@@ -7,7 +7,7 @@ import { NextRequest } from 'next/server';
 const supabaseAdmin = getSupabaseAdminClient();
 
 export async function GET(request: NextRequest) {
-  const auth = requireAdmin(request);
+  const auth = await requireAdmin(request);
   if (!auth.authenticated) return authError(auth);
   try {
     // 获取题目统计

@@ -1,6 +1,6 @@
 import { requireAdmin, authError, safeError } from '@/lib/api-auth';
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import { ApiErrors } from '@/lib/api-error';
 
 // 智能体白名单
@@ -8,7 +8,7 @@ const ALLOWED_AGENTS = ['yinshe_boshi', 'laxiang_zhushou'];
 
 // 搜索记忆
 export async function GET(request: NextRequest) {
-  const auth = requireAdmin(request);
+  const auth = await requireAdmin(request);
   if (!auth.authenticated) return authError(auth);
 
   try {
@@ -28,7 +28,7 @@ export async function GET(request: NextRequest) {
       return ApiErrors.validation('缺少搜索关键词');
     }
 
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
 
     // 使用模糊搜索
     const { data, error } = await client

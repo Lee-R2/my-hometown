@@ -1,73 +1,61 @@
 import { requireAdmin, authError, safeError } from '@/lib/api-auth';
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import { ApiErrors } from '@/lib/api-error';
 
-// 获取单个记忆
-export async function GET(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  try {
-    const { id } = await params;
+// 智能体白名单
+const ALLOWED_AGENTS = ['yinshe_boshi', 'laxiang_zhushou'];
 
-    if (!id) {
-      return ApiErrors.validation('缺少记忆ID');
-    }
-
-    const client = getSupabaseClient();
-    const { data, error } = await client
-      .from('agent_memories')
-      .select('*')
-      .eq('id', id)
-      .single();
-
-    if (error) throw error;
-
-    if (!data) {
-      return ApiErrors.notFound('记忆不存在');
-    }
-
-    return NextResponse.json({
-      success: true,
-      memory: data
-    });
-
-  } catch (error: any) {
-    console.error('获取记忆失败:', error);
-    return safeError(error);
-  }
-}
-
-// 更新记忆
-export async function PUT(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const auth = requireAdmin(request);
+// 添加对话消息
+export async function POST(request: NextRequest) {
+  const auth = await requireAdmin(request);
   if (!auth.authenticated) return authError(auth);
   try {
-    const { id } = await params;
     const body = await request.json();
-    const { content, importance, isActive } = body;
+    const { agentUsername, userId, userName, sessionId, role, content } = body;
 
-    if (!id) {
-      return ApiErrors.validation('缺少记忆ID');
+    // 验证智能体
+    if (!agentUsername || !ALLOWED_AGENTS.includes(agentUsername)) {
+      return ApiErrors.validation('无效的智能体');
     }
 
-    const updates: any = {
-      updated_at: new Date().toISOString()
-    };
+    // 验证会话ID
+    if (!sessionId) {
+      return ApiErrors.validation('缺少会话ID');
+    }
 
-    if (content !== undefined) updates.content = content;
-    if (importance !== undefined) updates.importance = importance;
-    if (isActive !== undefined) updates.is_active = isActive;
+    // 验证角色
+    if (!role || !['user', 'assistant'].includes(role)) {
+      return ApiErrors.validation('无效的角色');
+    }
 
-    const client = getSupabaseClient();
+    // 验证内容
+    if (!content || content.trim().length === 0) {
+      return ApiErrors.validation('消息内容不能为空');
+    }
+
+    const client = getSupabaseAdminClient();
+
+    // 更新会话的最后活动时间
+    await client
+      .from('agent_sessions')
+      .update({
+        last_activity_at: new Date().toISOString()
+      })
+      .eq('session_id', sessionId)
+      .eq('is_active', true);
+
+    // 添加对话消息
     const { data, error } = await client
-      .from('agent_memories')
-      .update(updates)
-      .eq('id', id)
+      .from('agent_conversations')
+      .insert({
+        agent_username: agentUsername,
+        user_id: userId,
+        user_name: userName,
+        session_id: sessionId,
+        role,
+        content
+      })
       .select()
       .single();
 
@@ -75,49 +63,72 @@ export async function PUT(
 
     return NextResponse.json({
       success: true,
-      message: '记忆已更新',
-      memory: data
+      message: '消息已保存',
+      messageId: data.id
     });
 
   } catch (error: any) {
-    console.error('更新记忆失败:', error);
+    console.error('保存对话失败:', error);
     return safeError(error);
   }
 }
 
-// 删除记忆（软删除）
-export async function DELETE(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const auth = requireAdmin(request);
+// 获取对话历史
+export async function GET(request: NextRequest) {
+  const auth = await requireAdmin(request);
   if (!auth.authenticated) return authError(auth);
 
   try {
-    const { id } = await params;
+    const { searchParams } = new URL(request.url);
+    const agentUsername = searchParams.get('agentUsername');
+    const sessionId = searchParams.get('sessionId');
+    const userId = searchParams.get('userId');
+    const limit = parseInt(searchParams.get('limit') || '20');
+    const offset = parseInt(searchParams.get('offset') || '0');
 
-    if (!id) {
-      return ApiErrors.validation('缺少记忆ID');
+    // 验证智能体
+    if (!agentUsername || !ALLOWED_AGENTS.includes(agentUsername)) {
+      return ApiErrors.validation('无效的智能体');
     }
 
-    const client = getSupabaseClient();
-    const { error } = await client
-      .from('agent_memories')
-      .update({
-        is_active: false,
-        updated_at: new Date().toISOString()
-      })
-      .eq('id', id);
+    // 验证会话ID
+    if (!sessionId) {
+      return ApiErrors.validation('缺少会话ID');
+    }
+
+    const client = getSupabaseAdminClient();
+    // VULN-AI-015 修复：附加 user_id 过滤条件，确保只能查到属于该用户的对话历史
+    // 超级管理员(super_admin)可选不传 userId 以支持跨用户管理；其他角色必须传 userId 自我限定
+    const currentRole = auth.payload?.role;
+    const currentUserId = auth.payload?.userId;
+    let query = client
+      .from('agent_conversations')
+      .select('*', { count: 'exact' })
+      .eq('agent_username', agentUsername)
+      .eq('session_id', sessionId);
+
+    if (currentRole !== 'super_admin') {
+      // 非超管只能查询自己的对话历史（按当前登录身份强制限定，忽略前端传入的 userId）
+      query = query.eq('user_id', currentUserId);
+    } else if (userId) {
+      // 超管可指定查询某个用户的对话历史
+      query = query.eq('user_id', userId);
+    }
+
+    const { data, error, count } = await query
+      .order('created_at', { ascending: true })
+      .range(offset, offset + limit - 1);
 
     if (error) throw error;
 
     return NextResponse.json({
       success: true,
-      message: '记忆已删除'
+      conversations: data || [],
+      total: count || 0
     });
 
   } catch (error: any) {
-    console.error('删除记忆失败:', error);
+    console.error('获取对话历史失败:', error);
     return safeError(error);
   }
 }

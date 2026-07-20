@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import { requireAdminOrTeacher, authError, safeError } from '@/lib/api-auth';
 import { ApiErrors } from '@/lib/api-error';
 import { maskPhone } from '@/lib/security';
 
 export async function GET(request: NextRequest) {
-  const auth = requireAdminOrTeacher(request);
+  const auth = await requireAdminOrTeacher(request);
   if (!auth.authenticated) return authError(auth);
   try {
     const { searchParams } = new URL(request.url);
@@ -13,7 +13,7 @@ export async function GET(request: NextRequest) {
     const schoolId = searchParams.get('schoolId');
     const countOnly = searchParams.get('countOnly') === 'true';
 
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
 
     let query = client
       .from('parent_team_relations')
@@ -106,7 +106,7 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const auth = requireAdminOrTeacher(request);
+  const auth = await requireAdminOrTeacher(request);
   if (!auth.authenticated) return authError(auth);
   try {
     const body = await request.json();
@@ -116,7 +116,7 @@ export async function POST(request: NextRequest) {
       return ApiErrors.validation('缺少必要参数');
     }
 
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
 
     if (action === 'remove') {
       const { error: deleteError } = await client

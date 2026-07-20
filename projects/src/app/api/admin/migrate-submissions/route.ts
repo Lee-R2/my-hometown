@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import { requireAdmin, authError } from '@/lib/api-auth';
 
 /**
@@ -7,10 +7,10 @@ import { requireAdmin, authError } from '@/lib/api-auth';
  * POST /api/admin/migrate-submissions
  */
 export async function POST(request: NextRequest) {
-  const auth = requireAdmin(request);
+  const auth = await requireAdmin(request);
   if (!auth.authenticated) return authError(auth);
 
-  const client = getSupabaseClient();
+  const client = getSupabaseAdminClient();
   const results: string[] = [];
 
   // 通过 Supabase 的 RPC 功能执行 SQL

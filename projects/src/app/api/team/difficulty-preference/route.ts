@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireTeam, authError, safeError } from '@/lib/api-auth';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { requireTeam, authError, safeError, getAuthenticatedClient } from '@/lib/api-auth';
 import { supabaseErrorResponse, ApiErrors } from '@/lib/api-error';
 
 /**
@@ -8,7 +7,7 @@ import { supabaseErrorResponse, ApiErrors } from '@/lib/api-error';
  * GET /api/team/difficulty-preference?team_id=xxx
  */
 export async function GET(request: NextRequest) {
-  const auth = requireTeam(request);
+  const auth = await requireTeam(request);
   if (!auth.authenticated) return authError(auth);
   try {
     // 强制使用认证令牌中的 userId，防止横向越权
@@ -18,7 +17,7 @@ export async function GET(request: NextRequest) {
       return ApiErrors.validation('认证令牌无效');
     }
 
-    const client = getSupabaseClient();
+    const client = getAuthenticatedClient(request, auth);
 
     const { data, error } = await client
       .from('teams')
@@ -46,7 +45,7 @@ export async function GET(request: NextRequest) {
  * Body: { team_id, difficulty }
  */
 export async function PUT(request: NextRequest) {
-  const auth = requireTeam(request);
+  const auth = await requireTeam(request);
   if (!auth.authenticated) return authError(auth);
   try {
     const body = await request.json();
@@ -62,7 +61,7 @@ export async function PUT(request: NextRequest) {
       return ApiErrors.validation('难度参数无效，应为 easy/medium/hard');
     }
 
-    const client = getSupabaseClient();
+    const client = getAuthenticatedClient(request, auth);
 
     const { error } = await client
       .from('teams')

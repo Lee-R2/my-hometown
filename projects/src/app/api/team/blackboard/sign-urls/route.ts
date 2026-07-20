@@ -5,7 +5,7 @@ import { ApiErrors } from '@/lib/api-error';
 
 // 生成签名URL
 export async function POST(request: NextRequest) {
-  const auth = requireTeam(request);
+  const auth = await requireTeam(request);
   if (!auth.authenticated) return authError(auth);
   try {
     const body = await request.json();

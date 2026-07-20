@@ -1,84 +1,38 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireTeam, authError, safeError } from '@/lib/api-auth';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
-import { ApiErrors } from '@/lib/api-error';
-import { executeTrade } from '@/lib/market-trade';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
+import { ApiErrors, supabaseErrorResponse } from '@/lib/api-error';
 
-const supabase = getSupabaseClient();
-
-// 卖方接受某报价
-export async function POST(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const auth = requireTeam(request);
+/**
+ * 获取小队详细信息
+ * 安全修复：team 角色只能查自己的信息，忽略客户端传入的 team_id
+ */
+export async function GET(request: NextRequest) {
+  const auth = await requireTeam(request);
   if (!auth.authenticated) return authError(auth);
-  const teamId = auth.payload!.userId;
-
   try {
-    const { id: listingId } = await params;
-    const { offer_id } = await request.json();
+    // 强制使用认证令牌中的 userId，防止横向越权
+    const teamId = auth.payload!.userId;
 
-    if (!offer_id) return ApiErrors.validation('缺少 offer_id');
-
-    const { data: listing, error: lErr } = await supabase
-      .from('cloud_market_listings')
-      .select('*')
-      .eq('id', listingId)
-      .single();
-    if (lErr || !listing) return ApiErrors.notFound('挂单不存在');
-    if (listing.team_id !== teamId) return ApiErrors.forbidden('无权操作他人挂单');
-    if (listing.status !== 'active') return ApiErrors.validation('挂单已不可接受报价');
-
-    const { data: offer, error: oErr } = await supabase
-      .from('cloud_market_offers')
-      .select('*')
-      .eq('id', offer_id)
-      .eq('listing_id', listingId)
-      .single();
-    if (oErr || !offer) return ApiErrors.notFound('报价不存在');
-    if (offer.status !== 'pending') return ApiErrors.validation('报价已处理');
-
-    const tradeResult = await executeTrade({
-      listingId,
-      buyerTeamId: offer.from_team_id,
-      sellerTeamId: teamId,
-      tradeType: offer.offer_type === 'barter' ? 'barter' : 'buy',
-      itemType: listing.item_type,
-      itemName: listing.item_name,
-      quantity: 1,
-      pointsPaid: offer.offer_price || 0,
-      scope: listing.scope,
-      themeId: listing.theme_id,
-      schoolId: listing.school_id,
-      offerId: offer.id,
-      barterItemType: offer.offer_item_type,
-      barterItemRef: offer.offer_item_ref,
-      barterItemName: offer.offer_item_name,
-      barterQuantity: offer.offer_quantity,
-      sellerItemRef: listing.item_ref,
-      buyerItemRef: offer.offer_item_ref,
-    });
-
-    if (!tradeResult.success) {
-      return NextResponse.json(
-        { success: false, error: tradeResult.error },
-        { status: tradeResult.errorCode === 'INSUFFICIENT_POINTS' ? 400 : 409 }
-      );
+    if (!teamId) {
+      return ApiErrors.validation('认证令牌无效');
     }
 
-    await supabase
-      .from('cloud_market_offers')
-      .update({ status: 'accepted', responded_at: new Date().toISOString() })
-      .eq('id', offer_id);
-    await supabase
-      .from('cloud_market_offers')
-      .update({ status: 'auto_expired', responded_at: new Date().toISOString() })
-      .eq('listing_id', listingId)
-      .eq('status', 'pending')
-      .neq('id', offer_id);
+    const supabase = getSupabaseAdminClient();
 
-    return NextResponse.json({ success: true, data: { tradeId: tradeResult.tradeId } });
+    const { data, error } = await supabase
+      .from('teams')
+      .select('id, code, name, points, heart_shards, heart_gems, created_by, has_completed_pretest, preferred_difficulty')
+      .eq('id', teamId)
+      .single();
+
+    if (error) {
+      // 安全修复：不直接返回 error.message，避免泄露数据库内部信息
+      // 生产环境返回通用消息，开发环境通过 supabaseErrorResponse 返回调试详情
+      return supabaseErrorResponse(error, '获取小队信息失败');
+    }
+
+    return NextResponse.json({ success: true, data });
   } catch (error: any) {
     return safeError(error);
   }

@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { safeGetJSON } from '@/lib/utils';
 import { useRouter } from 'next/navigation';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -127,12 +128,11 @@ export default function SkillsManagementPage() {
 
   useEffect(() => {
     // 获取用户信息
-    const userStr = localStorage.getItem('user');
-    if (!userStr) {
+    const userObj = safeGetJSON<User | null>('user', null);
+    if (!userObj) {
       router.push('/admin/login');
       return;
     }
-    const userObj = JSON.parse(userStr);
     setUser(userObj);
 
     fetchSkills();

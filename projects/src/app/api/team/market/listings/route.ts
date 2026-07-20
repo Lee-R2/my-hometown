@@ -1,16 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireTeam, authError, safeError } from '@/lib/api-auth';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import { ApiErrors } from '@/lib/api-error';
 import { validateCreateListing } from '@/lib/market-validation';
 import { CreateListingInput } from '@/lib/market-types';
 import { isToolRewardType, isSkillRewardType } from '@/lib/market-validation';
 
-const supabase = getSupabaseClient();
+const supabase = getSupabaseAdminClient();
 
 // 查询挂单列表
 export async function GET(request: NextRequest) {
-  const auth = requireTeam(request);
+  const auth = await requireTeam(request);
   if (!auth.authenticated) return authError(auth);
   const teamId = auth.payload!.userId;
 
@@ -62,7 +62,7 @@ export async function GET(request: NextRequest) {
 
 // 创建挂单
 export async function POST(request: NextRequest) {
-  const auth = requireTeam(request);
+  const auth = await requireTeam(request);
   if (!auth.authenticated) return authError(auth);
   const teamId = auth.payload!.userId;
 

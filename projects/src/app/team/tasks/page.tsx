@@ -19,6 +19,7 @@ import {
 import { toast } from 'sonner';
 import { useScrollPosition } from '@/hooks/use-scroll-position';
 import { useResponsive } from '@/hooks/use-responsive';
+import { safeJSONParse } from '@/lib/utils';
 
 interface Team {
   id: string;
@@ -76,7 +77,7 @@ export default function TasksPage() {
       return;
     }
     
-    const teamObj = JSON.parse(teamData);
+    const teamObj = safeJSONParse(teamData, {} as any);
     setTeam(teamObj);
     fetchSubmissions(teamObj.id);
     fetchThemes();

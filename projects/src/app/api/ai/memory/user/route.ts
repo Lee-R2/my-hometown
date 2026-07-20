@@ -1,11 +1,11 @@
-import { requireAnyAuth, authError, safeError } from '@/lib/api-auth';
+import { requireAnyAuth, authError, safeError, getAuthenticatedClient } from '@/lib/api-auth';
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import { ApiErrors } from '@/lib/api-error';
 
 // GET: 获取用户记忆
 export async function GET(request: NextRequest) {
-  const auth = requireAnyAuth(request);
+  const auth = await requireAnyAuth(request);
   if (!auth.authenticated) return authError(auth);
 
   try {
@@ -19,7 +19,13 @@ export async function GET(request: NextRequest) {
       return ApiErrors.validation('缺少 userId');
     }
 
-    const supabase = getSupabaseClient();
+    // 安全修复 SEC-002: 校验查询的 userId 与认证身份一致,防止 IDOR 越权读取他人记忆
+    // super_admin 可查询任意用户(管理后台用),其他角色只能查自己
+    if (auth.payload!.role !== 'super_admin' && userId !== auth.payload!.userId) {
+      return ApiErrors.forbidden('无权查询其他用户的记忆');
+    }
+
+    const supabase = getAuthenticatedClient(request, auth);
 
     let query = supabase
       .from('user_memories')
@@ -58,7 +64,8 @@ export async function POST(request: NextRequest) {
     // 定时任务清理：归档长期未更新且低重要性的用户记忆
     // scheduler.js (memory-distiller) 每日 03:00 调用，不携带认证
     if (body.action === 'cleanup') {
-      const supabase = getSupabaseClient();
+      // SEC-001: scheduler 无认证调用,需用 admin 客户端执行跨用户归档
+      const supabase = getSupabaseAdminClient();
       const now = new Date();
       // 90 天未更新且重要性 < 3 的记忆归档（软删除）
       const threshold = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000).toISOString();
@@ -84,7 +91,7 @@ export async function POST(request: NextRequest) {
     }
 
     // 普通写入流程需要认证
-    const auth = requireAnyAuth(request);
+    const auth = await requireAnyAuth(request);
     if (!auth.authenticated) return authError(auth);
 
     const { userId, agentType, category, key, value, importance, source } = body;
@@ -93,7 +100,7 @@ export async function POST(request: NextRequest) {
       return ApiErrors.validation('缺少必填字段: userId, category, key, value');
     }
 
-    const supabase = getSupabaseClient();
+    const supabase = getAuthenticatedClient(request, auth);
     const agent = agentType || 'assistant';
 
     // 检查是否已存在相同 key 的记忆（包括已软删除的）
@@ -184,7 +191,7 @@ export async function POST(request: NextRequest) {
 
 // PUT: 批量保存对话中提取的用户记忆
 export async function PUT(request: NextRequest) {
-  const auth = requireAnyAuth(request);
+  const auth = await requireAnyAuth(request);
   if (!auth.authenticated) return authError(auth);
 
   try {
@@ -200,7 +207,7 @@ export async function PUT(request: NextRequest) {
       return ApiErrors.forbidden('无权操作其他用户的记忆');
     }
 
-    const supabase = getSupabaseClient();
+    const supabase = getAuthenticatedClient(request, auth);
     const agent = agentType || 'assistant';
     const results: Array<{ key: string; action: string }> = [];
 
@@ -279,7 +286,7 @@ export async function PUT(request: NextRequest) {
 
 // DELETE: 删除用户记忆
 export async function DELETE(request: NextRequest) {
-  const auth = requireAnyAuth(request);
+  const auth = await requireAnyAuth(request);
   if (!auth.authenticated) return authError(auth);
 
   try {
@@ -296,10 +303,22 @@ export async function DELETE(request: NextRequest) {
       return ApiErrors.forbidden('无权删除其他用户的记忆');
     }
 
-    const supabase = getSupabaseClient();
+    const supabase = getAuthenticatedClient(request, auth);
 
     if (id) {
-      // 软删除指定记忆
+      // LE-A22: 软删除指定记忆,必须校验该记忆归属于当前用户(或 super_admin)
+      // 先查询该记忆的 user_id,然后校验归属,防止管理员越权删除其他用户的记忆
+      if (auth.payload!.role !== 'super_admin') {
+        const { data: mem } = await supabase
+          .from('user_memories')
+          .select('user_id')
+          .eq('id', id)
+          .maybeSingle();
+        if (mem && mem.user_id !== auth.payload!.userId) {
+          return ApiErrors.forbidden('无权删除其他用户的记忆');
+        }
+      }
+
       const { error } = await supabase
         .from('user_memories')
         .update({ is_active: false, updated_at: new Date().toISOString() })
@@ -309,7 +328,7 @@ export async function DELETE(request: NextRequest) {
         return ApiErrors.validation('删除失败');
       }
     } else if (userId) {
-      // 软删除用户所有记忆
+      // 软删除用户所有记忆(userId 已在上方校验归属)
       const { error } = await supabase
         .from('user_memories')
         .update({ is_active: false, updated_at: new Date().toISOString() })

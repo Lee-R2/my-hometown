@@ -1,190 +1,203 @@
-import { requireAnyAuth, requireAdminOrVolunteer, authError, safeError } from '@/lib/api-auth';
+import { requireTeam, authError, safeError } from '@/lib/api-auth';
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import { supabaseErrorResponse, ApiErrors } from '@/lib/api-error';
 
-export async function GET(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const auth = requireAnyAuth(request);
+/**
+ * 小队选择主题
+ * 支持多周期：完成当前主题后可选择新主题
+ */
+export async function POST(request: NextRequest) {
+  const auth = await requireTeam(request);
   if (!auth.authenticated) return authError(auth);
 
   try {
-    const { id } = await params;
-    const client = getSupabaseClient();
+    const { teamId, themeId } = await request.json();
 
-    const { data: theme, error } = await client
-      .from('task_themes')
-      .select('*')
-      .eq('id', id)
+    if (!teamId || !themeId) {
+      return ApiErrors.validation('缺少必要参数');
+    }
+
+    // IDOR 防护：禁止为其他小队选择主题
+    if (teamId !== auth.payload!.userId) {
+      return ApiErrors.forbidden('无权为其他小队选择主题');
+    }
+
+    const client = getSupabaseAdminClient();
+
+    // 1. 检查小队是否存在
+    const { data: team, error: teamError } = await client
+      .from('teams')
+      .select('id, current_theme_id, current_task_id, assigned_volunteer_id, teacher_id, name, cycle')
+      .eq('id', teamId)
       .single();
 
-    if (error || !theme) {
+    if (teamError || !team) {
+      return ApiErrors.notFound('小队不存在');
+    }
+
+    // 2. 检查主题是否存在
+    const { data: theme, error: themeError } = await client
+      .from('task_themes')
+      .select('id, name')
+      .eq('id', themeId)
+      .single();
+
+    if (themeError || !theme) {
       return ApiErrors.notFound('主题不存在');
     }
 
-    // 获取该主题下的任务组数量（按 task_group_id 去重）
-    const { data: taskGroups } = await client
-      .from('tasks')
-      .select('task_group_id')
-      .eq('theme_id', id)
-      .eq('is_active', true);
+    // 3. 确定当前周期
+    const currentCycle = team.cycle || 1;
 
-    const taskGroupCount = new Set((taskGroups || []).map((t: { task_group_id: string | null }) => t.task_group_id)).size;
+    // 4. 检查当前周期是否已有选择记录
+    const { data: existingSelection, error: selectionError } = await client
+      .from('team_theme_selections')
+      .select('id, status')
+      .eq('team_id', teamId)
+      .eq('cycle', currentCycle)
+      .single();
 
-    // 获取已选择该主题的小队数量
-    const { count: teamCount } = await client
-      .from('teams')
-      .select('*', { count: 'exact', head: true })
-      .eq('current_theme_id', id);
+    // 如果当前周期已有选择且未完成，不允许重新选择
+    if (existingSelection && existingSelection.status !== 'completed') {
+      return ApiErrors.conflict('当前周期已选择主题，请先完成当前主题');
+    }
 
-    return NextResponse.json({ 
-      theme: {
-        ...theme,
-        taskCount: taskGroupCount,
-        teamCount: teamCount || 0,
+    // 5. 如果是选择新周期（当前主题已完成）
+    let newCycle = currentCycle;
+    if (existingSelection && existingSelection.status === 'completed') {
+      // 进入下一个周期
+      newCycle = currentCycle + 1;
+    }
+
+    // 6. 检查主题是否已被同一指导老师下的其他小队在当前周期选择（排除自己）
+    // 同一指导老师 = 同一志愿者(created_by) 或 同一助学老师(teacher_id)
+    const siblingTeamIds: string[] = [];
+    
+    if (team.assigned_volunteer_id) {
+      const { data: volunteerTeams } = await client
+        .from('teams')
+        .select('id')
+        .eq('assigned_volunteer_id', team.assigned_volunteer_id)
+        .eq('status', 'active')
+        .neq('id', teamId);
+      (volunteerTeams || []).forEach(t => siblingTeamIds.push(t.id));
+    }
+    
+    if (team.teacher_id) {
+      const { data: teacherTeams } = await client
+        .from('teams')
+        .select('id')
+        .eq('teacher_id', team.teacher_id)
+        .eq('status', 'active')
+        .neq('id', teamId);
+      (teacherTeams || []).forEach(t => {
+        if (!siblingTeamIds.includes(t.id)) siblingTeamIds.push(t.id);
+      });
+    }
+    
+    let sameCycleTeamsWithSameTheme: Array<{ team_id: string }> = [];
+    let checkError: { message: string } | null | undefined = null;
+    if (siblingTeamIds.length > 0) {
+      const { data: conflictData, error: selCheckError } = await client
+        .from('team_theme_selections')
+        .select('team_id')
+        .eq('theme_id', themeId)
+        .eq('cycle', newCycle)
+        .eq('status', 'in_progress')
+        .in('team_id', siblingTeamIds);
+      
+      checkError = selCheckError;
+      if (!selCheckError && conflictData) {
+        sameCycleTeamsWithSameTheme = conflictData;
       }
-    });
-  } catch (error) {
-    console.error('获取主题详情错误:', error);
-    return ApiErrors.validation('获取主题详情失败');
-  }
-}
+    }
 
-export async function PUT(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const auth = requireAdminOrVolunteer(request);
-  if (!auth.authenticated) return authError(auth);
+    if (!checkError && sameCycleTeamsWithSameTheme.length > 0) {
+      // 获取选择小队的名称
+      const teamIds = sameCycleTeamsWithSameTheme.map(t => t.team_id);
+      const { data: teams } = await client
+        .from('teams')
+        .select('name')
+        .in('id', teamIds);
+      
+      const teamName = teams && teams.length > 0 ? teams[0].name : '其他小队';
+      return ApiErrors.conflict(`该主题已被「${teamName}」在第${newCycle}周期选择`);
+    }
 
-  try {
-    const { id } = await params;
-    const body = await request.json();
-    const client = getSupabaseClient();
+    // 7. 记录选择到 team_theme_selections 表
+    const { error: insertError } = await client
+      .from('team_theme_selections')
+      .insert({
+        team_id: teamId,
+        theme_id: themeId,
+        cycle: newCycle,
+        selected_at: new Date().toISOString(),
+        status: 'in_progress',
+      });
 
-    const { 
-      userId, 
-      userRole, 
-      schoolIds, 
-      finalTaskFormId, // 保留兼容性
-      guiderFormId,
-      lightMageFormId,
-      secretScholarFormId,
-      ...themeData 
-    } = body;
+    if (insertError) {
+      console.error('记录主题选择失败:', insertError);
+      return supabaseErrorResponse(insertError, '记录选择失败');
+    }
 
-    // 构建更新数据
-    const updateData: Record<string, any> = {
-      ...themeData,
+    // 8. 更新小队信息
+    const updateData: Record<string, unknown> = {
+      current_theme_id: themeId,
       updated_at: new Date().toISOString(),
     };
 
-    // 如果更新了主题名称，检查重名（同一范围内不允许同名）
-    if (themeData.name && themeData.name.trim()) {
-      const trimmedName = themeData.name.trim();
-      // 先获取当前主题信息，判断其范围
-      const { data: currentTheme } = await client
-        .from('task_themes')
-        .select('id, is_exclusive, school_id')
-        .eq('id', id)
-        .maybeSingle();
+    // 如果是新周期，清空当前任务
+    if (newCycle > currentCycle) {
+      updateData.cycle = newCycle;
+      updateData.current_task_id = null;
+    }
 
-      if (currentTheme) {
-        let dupQuery = client
-          .from('task_themes')
-          .select('id, name')
-          .eq('name', trimmedName)
-          .eq('is_active', true)
-          .neq('id', id); // 排除自身
+    const { error: updateTeamError } = await client
+      .from('teams')
+      .update(updateData)
+      .eq('id', teamId);
 
-        if (currentTheme.is_exclusive && currentTheme.school_id) {
-          dupQuery = dupQuery.eq('school_id', currentTheme.school_id);
-        } else {
-          dupQuery = dupQuery.eq('is_exclusive', false);
-        }
+    if (updateTeamError) {
+      console.error('更新小队主题失败:', updateTeamError);
+      // 回滚选择记录
+      await client
+        .from('team_theme_selections')
+        .delete()
+        .eq('team_id', teamId)
+        .eq('cycle', newCycle);
+      return supabaseErrorResponse(updateTeamError, '更新小队主题失败');
+    }
 
-        const { data: dupTheme } = await dupQuery.maybeSingle();
-        if (dupTheme) {
-          return ApiErrors.conflict(
-            currentTheme.is_exclusive
-              ? '该学校下已存在同名主题，请使用其他名称'
-              : '已存在同名公共主题，请使用其他名称'
-          );
-        }
+    // 9. 给志愿者发送通知
+    const notifyVolunteerId = team.assigned_volunteer_id;
+    if (notifyVolunteerId) {
+      try {
+        await client
+          .from('notifications')
+          .insert({
+            type: 'theme_selected',
+            title: newCycle > 1 ? '小队开始新周期' : '新小队选择主题',
+            content: `小队「${team.name}」选择了主题「${theme.name}」（第${newCycle}周期），请及时下发任务！`,
+            target_type: 'volunteer',
+            target_id: notifyVolunteerId,
+            related_team_id: teamId,
+            related_theme_id: themeId,
+            is_read: false,
+          });
+      } catch (notifyError) {
+        console.error('发送通知失败:', notifyError);
       }
     }
 
-    // 处理最后任务表单ID（兼容旧逻辑）
-    if (finalTaskFormId !== undefined) {
-      updateData.final_task_form_id = finalTaskFormId || null;
-    }
-
-    // 处理三个角色的表单ID
-    if (guiderFormId !== undefined) {
-      updateData.guider_form_id = guiderFormId || null;
-    }
-    if (lightMageFormId !== undefined) {
-      updateData.light_mage_form_id = lightMageFormId || null;
-    }
-    if (secretScholarFormId !== undefined) {
-      updateData.secret_scholar_form_id = secretScholarFormId || null;
-    }
-
-    // 更新主题基本信息
-    const { data: theme, error } = await client
-      .from('task_themes')
-      .update(updateData)
-      .eq('id', id)
-      .select()
-      .single();
-
-    if (error) {
-      return supabaseErrorResponse(error, '更新主题失败');
-    }
-
-    return NextResponse.json({ success: true, theme });
+    return NextResponse.json({ 
+      success: true, 
+      message: newCycle > 1 ? `成功进入第${newCycle}周期，选择「${theme.name}」` : '主题选择成功',
+      themeId,
+      cycle: newCycle,
+    });
   } catch (error) {
-    console.error('更新主题错误:', error);
-    return ApiErrors.validation('更新主题失败');
-  }
-}
-
-export async function DELETE(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const auth = requireAdminOrVolunteer(request);
-  if (!auth.authenticated) return authError(auth);
-
-  try {
-    const { id } = await params;
-    const client = getSupabaseClient();
-
-    // 检查主题下是否有任务
-    const { count: taskCount } = await client
-      .from('tasks')
-      .select('*', { count: 'exact', head: true })
-      .eq('theme_id', id)
-      .eq('is_active', true);
-
-    if (taskCount && taskCount > 0) {
-      return ApiErrors.validation('该主题下已有任务，无法删除');
-    }
-
-    const { error } = await client
-      .from('task_themes')
-      .update({ is_active: false, updated_at: new Date().toISOString() })
-      .eq('id', id);
-
-    if (error) {
-      return supabaseErrorResponse(error, '删除主题失败');
-    }
-
-    return NextResponse.json({ success: true });
-  } catch (error) {
-    console.error('删除主题错误:', error);
-    return ApiErrors.validation('删除主题失败');
+    console.error('选择主题错误:', error);
+    return ApiErrors.validation('选择主题失败');
   }
 }

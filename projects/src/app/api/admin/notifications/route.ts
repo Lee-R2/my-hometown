@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import { requireAnyAuth, authError } from '@/lib/api-auth';
 import { ApiErrors } from '@/lib/api-error';
 
@@ -9,7 +9,7 @@ import { ApiErrors } from '@/lib/api-error';
  */
 
 export async function GET(request: NextRequest) {
-  const auth = requireAnyAuth(request);
+  const auth = await requireAnyAuth(request);
   if (!auth.authenticated) return authError(auth);
   try {
     // 身份从认证令牌获取，防止伪造身份查看他人通知
@@ -18,7 +18,7 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const unreadOnly = searchParams.get('unreadOnly') === 'true';
 
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
 
     // 构建查询条件
     let query = client
@@ -56,12 +56,12 @@ export async function GET(request: NextRequest) {
  */
 
 export async function POST(request: NextRequest) {
-  const auth = requireAnyAuth(request);
+  const auth = await requireAnyAuth(request);
   if (!auth.authenticated) return authError(auth);
 
   try {
     const body = await request.json();
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
     // 身份从认证令牌获取，只能标记自己的通知为已读
     const userId = auth.payload!.userId;
 
@@ -82,11 +82,13 @@ export async function POST(request: NextRequest) {
     }
 
     if (body.notificationId) {
-      // 标记单个通知为已读
+      // LE-A07/A12: 标记单个通知为已读时,必须校验通知归属(target_id === 当前用户),
+      // 防止任意用户标记他人通知为已读
       const { error } = await client
         .from('notifications')
         .update({ is_read: true, read_at: new Date().toISOString() })
-        .eq('id', body.notificationId);
+        .eq('id', body.notificationId)
+        .eq('target_id', userId);
 
       if (error) {
         console.error('标记通知已读失败:', error);

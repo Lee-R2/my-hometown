@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireTeam, authError, safeError } from '@/lib/api-auth';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 
 /**
  * 逾期提醒API
@@ -8,10 +8,10 @@ import { getSupabaseClient } from '@/storage/database/supabase-client';
  * 建议每日定时调用一次（如每天早上9点）
  */
 export async function POST(request: NextRequest) {
-  const auth = requireTeam(request);
+  const auth = await requireTeam(request);
   if (!auth.authenticated) return authError(auth);
   try {
-    const supabase = getSupabaseClient();
+    const supabase = getSupabaseAdminClient();
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
@@ -144,10 +144,10 @@ export async function POST(request: NextRequest) {
  * 获取逾期统计
  */
 export async function GET(request: NextRequest) {
-  const auth = requireTeam(request);
+  const auth = await requireTeam(request);
   if (!auth.authenticated) return authError(auth);
   try {
-    const supabase = getSupabaseClient();
+    const supabase = getSupabaseAdminClient();
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 

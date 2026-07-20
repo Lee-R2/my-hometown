@@ -1,228 +1,260 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireTeam, authError } from '@/lib/api-auth';
+import { requireTeam, authError, safeError, getAuthenticatedClient } from '@/lib/api-auth';
 import { supabaseErrorResponse, ApiErrors } from '@/lib/api-error';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
-import { generateSignedUrl } from '@/lib/storage-utils';
+import { LIKE_POINTS, REWARD_TYPE_LABELS } from '@/lib/constants';
 
-/**
- * 获取其他小队的任务进度详情
- * 包括：每个任务的介绍、产出、产出状态、老师评语、审核结果、点赞状态
- */
-export async function GET(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const auth = requireTeam(request);
+// 获取小队赠送积分总数（transfer_out 的绝对值之和）
+async function getTotalTransferredPoints(client: ReturnType<typeof getAuthenticatedClient>, teamId: string): Promise<number> {
+  const { data } = await client
+    .from('point_transactions')
+    .select('points')
+    .eq('team_id', teamId)
+    .eq('change_type', 'transfer_out');
+  if (!data || data.length === 0) return 0;
+  return data.reduce((sum: number, r: { points: number }) => sum + Math.abs(r.points), 0);
+}
+
+export async function GET(request: NextRequest) {
+  const auth = await requireTeam(request);
   if (!auth.authenticated) return authError(auth);
   try {
-    const { id: teamId } = await params;
-    const { searchParams } = new URL(request.url);
-    const fromTeamId = searchParams.get('fromTeamId'); // 当前小队ID，用于查询点赞状态
+    // 强制使用认证令牌中的 userId，防止横向越权
+    const teamId = auth.payload!.userId;
     
-    const client = getSupabaseClient();
+    if (!teamId) {
+      return ApiErrors.validation('认证令牌无效');
+    }
 
-    // 获取小队信息
-    const { data: team, error: teamError } = await client
+    const client = getAuthenticatedClient(request, auth);
+
+    // 获取小队当前的 theme_id，用于过滤当前轮次的数据
+    const { data: team } = await client
       .from('teams')
-      .select('id, name, current_theme_id, cycle')
+      .select('current_theme_id')
       .eq('id', teamId)
       .single();
 
-    if (teamError || !team) {
-      return ApiErrors.notFound('小队不存在');
-    }
-
-    if (!team.current_theme_id) {
-      return NextResponse.json({ 
-        team: { id: team.id, name: team.name },
-        theme: null,
-        tasks: [],
-        submissions: [],
+    // 如果没有当前主题，返回空数据（已完成主题后或未选择主题）
+    if (!team?.current_theme_id) {
+      return NextResponse.json({
+        rewards: [],
+        groupedRewards: {},
+        typeLabels: {},
+        stats: { total: 0, byType: {}, totalPoints: 0 },
+        likes: { total: 0, points: 0 },
+        heartGems: {
+          fragments: 0,
+          gems: 0,
+          totalSentLikes: 0,
+          totalTransferredPoints: 0,
+          fragmentsPerGem: 10,
+        },
       });
     }
 
-    const currentCycle = team.cycle || 1;
-
-    // 获取当前主题信息
-    const { data: theme } = await client
-      .from('task_themes')
-      .select('id, name, icon, description')
-      .eq('id', team.current_theme_id)
-      .single();
-
-    // 获取该主题下的所有任务
-    const { data: tasks, error: tasksError } = await client
+    // 获取当前主题下的所有任务ID
+    const { data: themeTasks } = await client
       .from('tasks')
-      .select('id, title, stage, points, description, task_type')
+      .select('id')
       .eq('theme_id', team.current_theme_id)
-      .eq('is_active', true)
-      .order('stage', { ascending: true });
+      .eq('is_active', true);
 
-    if (tasksError) {
-      console.error('获取任务列表失败:', tasksError);
-      return supabaseErrorResponse(tasksError, '获取任务列表失败');
+    const themeTaskIds = (themeTasks || []).map(t => t.id);
+
+    // 如果当前主题没有任务，返回空数据
+    if (themeTaskIds.length === 0) {
+      // 获取 teams 表中的碎片和宝石数据（两种碎片已合并计算）
+      const { data: teamData } = await client
+        .from('teams')
+        .select('heart_shards, heart_gems')
+        .eq('id', teamId)
+        .maybeSingle();
+
+      // 获取点赞统计
+      const { data: heartGemsData } = await client
+        .from('heart_gems')
+        .select('total_sent_likes')
+        .eq('team_id', teamId)
+        .maybeSingle();
+
+      return NextResponse.json({
+        rewards: [],
+        groupedRewards: {},
+        typeLabels: {},
+        stats: { total: 0, byType: {}, totalPoints: 0 },
+        likes: { total: 0, points: 0 },
+        heartGems: {
+          fragments: teamData?.heart_shards || 0,
+          gems: teamData?.heart_gems || 0,
+          totalSentLikes: heartGemsData?.total_sent_likes || 0,
+          totalTransferredPoints: await getTotalTransferredPoints(client, teamId),
+          fragmentsPerGem: 10,
+        },
+      });
     }
 
-    // 获取该小队在该主题下的所有任务提交记录（按当前周期过滤）
-    const taskIds = (tasks || []).map(t => t.id);
-    let submissions: any[] = [];
-    
-    if (taskIds.length > 0) {
-      const { data: submissionData, error: submissionError } = await client
+    // 1. 获取小队当前主题下的激励记录
+    const { data: userRewards, error } = await client
+      .from('user_rewards')
+      .select('id, earned_at, task_id, reward_id')
+      .eq('team_id', teamId)
+      .in('task_id', themeTaskIds) // 只查询当前主题下的任务
+      .order('earned_at', { ascending: false });
+
+    if (error) {
+      console.error('获取激励列表错误:', error);
+      return supabaseErrorResponse(error, '获取激励列表失败');
+    }
+
+    // 如果没有激励记录，返回空数据
+    if (!userRewards || userRewards.length === 0) {
+      // 获取点赞统计
+      const { data: submissions } = await client
         .from('task_submissions')
-        .select(`
-          id,
-          task_id,
-          status,
-          rating,
-          review_comment,
-          reviewed_at,
-          created_at,
-          content,
-          file_urls,
-          reviewer_id
-        `)
+        .select('id')
         .eq('team_id', teamId)
-        .eq('cycle', currentCycle)
-        .in('task_id', taskIds)
-        .order('created_at', { ascending: true });
+        .in('task_id', themeTaskIds);
 
-      if (submissionError) {
-        console.error('获取提交记录失败:', submissionError);
-      }
+      const submissionIds = (submissions || []).map(s => s.id);
 
-      // 获取审核者信息
-      const reviewerIds = [...new Set((submissionData || []).map(s => s.reviewer_id).filter(Boolean))];
-      const reviewersMap = new Map();
-      if (reviewerIds.length > 0) {
-        const { data: reviewers } = await client
-          .from('users')
-          .select('id, name')
-          .in('id', reviewerIds);
-        (reviewers || []).forEach(r => reviewersMap.set(r.id, r.name));
-      }
-
-      // 收集所有文件 key，批量生成签名 URL
-      const allFileKeys: string[] = [];
-      (submissionData || []).forEach(s => {
-        const files = s.file_urls || [];
-        files.forEach((f: { key?: string }) => {
-          if (f.key) allFileKeys.push(f.key);
-        });
-      });
-
-      // 批量生成签名 URL
-      const signedUrlMap = new Map<string, string>();
-      await Promise.all(
-        [...new Set(allFileKeys)].map(async (key) => {
-          try {
-            const url = await generateSignedUrl({
-              key,
-              expireTime: 7 * 24 * 60 * 60, // 7天
-            });
-            signedUrlMap.set(key, url);
-          } catch (err) {
-            console.error('生成签名URL失败:', key, err);
-          }
-        })
-      );
-
-      // 处理提交记录
-      submissions = (submissionData || []).map(s => {
-        const filesWithSignedUrls = (s.file_urls || []).map((f: { key?: string; url?: string; name?: string; type?: string; size?: number }) => {
-          const finalUrl = f.key && signedUrlMap.get(f.key) ? signedUrlMap.get(f.key)! : (f.url || '');
-          return {
-            name: f.name || '未命名文件',
-            url: finalUrl,
-            type: f.type,
-            size: f.size,
-          };
-        });
-
-        return {
-          id: s.id,
-          task_id: s.task_id,
-          status: s.status,
-          rating: s.rating,
-          review_comment: s.review_comment,
-          reviewer_name: s.reviewer_id ? reviewersMap.get(s.reviewer_id) || '未知' : null,
-          reviewed_at: s.reviewed_at,
-          created_at: s.created_at,
-          content: s.content,
-          file_urls: filesWithSignedUrls,
-        };
-      });
-
-      // 获取每个提交的点赞数
-      const submissionIds = submissions.map(s => s.id);
-      let likesMap = new Map<string, { count: number; liked: boolean }>();
-      
+      let likesStats = { total: 0, points: 0 };
       if (submissionIds.length > 0) {
-        // 批量获取点赞数
-        const { data: likesData } = await client
+        const { count: likeCount } = await client
           .from('likes')
-          .select('submission_id')
+          .select('id', { count: 'exact', head: true })
           .in('submission_id', submissionIds);
 
-        // 统计每个提交的点赞数
-        const likeCounts = new Map<string, number>();
-        (likesData || []).forEach(like => {
-          const count = likeCounts.get(like.submission_id) || 0;
-          likeCounts.set(like.submission_id, count + 1);
-        });
-
-        // 如果有当前小队ID，查询是否已点赞（team_id 字段存储点赞者）
-        let likedSubmissionIds = new Set<string>();
-        if (fromTeamId) {
-          const { data: myLikes } = await client
-            .from('likes')
-            .select('submission_id')
-            .eq('team_id', fromTeamId)
-            .in('submission_id', submissionIds);
-          (myLikes || []).forEach(like => likedSubmissionIds.add(like.submission_id));
-        }
-
-        // 合并到map
-        submissionIds.forEach(sid => {
-          likesMap.set(sid, {
-            count: likeCounts.get(sid) || 0,
-            liked: likedSubmissionIds.has(sid),
-          });
-        });
+        likesStats = {
+          total: likeCount || 0,
+          points: (likeCount || 0) * LIKE_POINTS,
+        };
       }
 
-      // 给提交记录添加点赞信息
-      submissions = submissions.map(s => ({
-        ...s,
-        likeCount: likesMap.get(s.id)?.count || 0,
-        liked: likesMap.get(s.id)?.liked || false,
-      }));
+      // 获取 teams 表中的碎片和宝石数据（两种碎片已合并计算）
+      const { data: teamData } = await client
+        .from('teams')
+        .select('heart_shards, heart_gems')
+        .eq('id', teamId)
+        .maybeSingle();
+
+      // 获取点赞统计
+      const { data: heartGemsData } = await client
+        .from('heart_gems')
+        .select('total_sent_likes')
+        .eq('team_id', teamId)
+        .maybeSingle();
+
+      return NextResponse.json({
+        rewards: [],
+        groupedRewards: {},
+        typeLabels: {},
+        stats: { total: 0, byType: {}, totalPoints: 0 },
+        likes: likesStats,
+        heartGems: {
+          fragments: teamData?.heart_shards || 0,
+          gems: teamData?.heart_gems || 0,
+          totalSentLikes: heartGemsData?.total_sent_likes || 0,
+          totalTransferredPoints: await getTotalTransferredPoints(client, teamId),
+          fragmentsPerGem: 10,
+        },
+      });
     }
 
-    // 组装任务进度数据
-    const tasksWithProgress = (tasks || []).map(task => {
-      const submission = submissions.find(s => s.task_id === task.id);
-      return {
-        ...task,
-        submission: submission || null,
-      };
+    // 2. 获取所有奖励详情
+    const rewardIds = [...new Set(userRewards.map((r: any) => r.reward_id))];
+    const { data: rewardsData, error: rewardsError } = await client
+      .from('rewards')
+      .select('id, name, description, icon, points, type, image_url, conditions, condition_logic')
+      .in('id', rewardIds);
+
+    if (rewardsError) {
+      console.error('获取奖励详情错误:', rewardsError);
+      return ApiErrors.validation('获取奖励详情失败');
+    }
+
+    // 3. 组装数据
+    const rewardsMap = new Map((rewardsData || []).map((r: any) => [r.id, r]));
+    const rewards = userRewards.map((ur: any) => ({
+      ...ur,
+      rewards: rewardsMap.get(ur.reward_id) || null,
+    }));
+
+    // 按类型分组统计
+    const groupedRewards: Record<string, typeof rewards> = {};
+    const typeLabels = REWARD_TYPE_LABELS;
+
+    rewards.forEach((reward: any) => {
+      const type = reward.rewards?.type || 'other';
+      if (!groupedRewards[type]) {
+        groupedRewards[type] = [];
+      }
+      groupedRewards[type].push(reward);
     });
 
+    // 计算统计信息
+    const stats = {
+      total: rewards.length,
+      byType: Object.keys(groupedRewards).reduce((acc, type) => {
+        acc[type] = groupedRewards[type].length;
+        return acc;
+      }, {} as Record<string, number>),
+      totalPoints: rewards.reduce((sum: number, r: any) => sum + (r.rewards?.points || 0), 0),
+    };
+
+    // 获取点赞数据
+    // 获取当前主题下的所有提交ID
+    const { data: submissions } = await client
+      .from('task_submissions')
+      .select('id')
+      .eq('team_id', teamId)
+      .in('task_id', themeTaskIds);
+
+    const submissionIds = (submissions || []).map(s => s.id);
+
+    // 获取这些提交获得的点赞数
+    let likesStats = { total: 0, points: 0 };
+    if (submissionIds.length > 0) {
+      const { count: likeCount } = await client
+        .from('likes')
+        .select('id', { count: 'exact', head: true })
+        .in('submission_id', submissionIds);
+
+      likesStats = {
+        total: likeCount || 0,
+        points: (likeCount || 0) * LIKE_POINTS,
+      };
+    }
+
+    // 获取 teams 表中的碎片和宝石数据（两种碎片已合并计算）
+    const { data: teamData } = await client
+      .from('teams')
+      .select('heart_shards, heart_gems')
+      .eq('id', teamId)
+      .maybeSingle();
+
+    // 获取点赞统计
+    const { data: heartGemsData } = await client
+      .from('heart_gems')
+      .select('total_sent_likes')
+      .eq('team_id', teamId)
+      .maybeSingle();
+
     return NextResponse.json({
-      team: {
-        id: team.id,
-        name: team.name,
+      rewards,
+      groupedRewards,
+      typeLabels,
+      stats,
+      likes: likesStats,
+      heartGems: {
+        fragments: teamData?.heart_shards || 0,
+        gems: teamData?.heart_gems || 0,
+        totalSentLikes: heartGemsData?.total_sent_likes || 0,
+        totalTransferredPoints: await getTotalTransferredPoints(client, teamId),
+        fragmentsPerGem: 10,
       },
-      theme: theme ? {
-        id: theme.id,
-        name: theme.name,
-        icon: theme.icon,
-        description: theme.description,
-      } : null,
-      tasks: tasksWithProgress,
     });
   } catch (error) {
-    console.error('获取其他小队任务进度错误:', error);
-    return ApiErrors.validation('获取其他小队任务进度错误');
+    console.error('获取激励列表错误:', error);
+    return safeError(error);
   }
 }

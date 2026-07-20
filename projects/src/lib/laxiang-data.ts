@@ -1,4 +1,4 @@
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 
 /**
  * 蜡象助手数据查询核心函数
@@ -14,7 +14,7 @@ export async function getLaxiangData(
   userId?: string,
   schoolId?: string
 ): Promise<any> {
-  const client = getSupabaseClient();
+  const client = getSupabaseAdminClient();
 
   switch (dataType) {
     case 'all':

@@ -1,6 +1,6 @@
 import { requireAdmin, authError, safeError } from '@/lib/api-auth';
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import { ApiErrors } from '@/lib/api-error';
 
 /**
@@ -10,7 +10,7 @@ import { ApiErrors } from '@/lib/api-error';
 
 // 发送消息
 export async function POST(request: NextRequest) {
-  const auth = requireAdmin(request);
+  const auth = await requireAdmin(request);
   if (!auth.authenticated) return authError(auth);
 
   try {
@@ -23,21 +23,21 @@ export async function POST(request: NextRequest) {
     }
 
     // 验证发送者和接收者
-    const validAgents = ['yinhe_boshi', 'laxiang_zhushou'];
+    const validAgents = ['yinshe_boshi', 'laxiang_zhushou'];
     if (!validAgents.includes(sender) || !validAgents.includes(receiver)) {
       return ApiErrors.validation('无效的智能体标识');
     }
 
     // 安全：不信任客户端传入的 sender。
     // admin/teacher/volunteer 调用此接口时，sender 必须是 laxiang_zhushou，
-    // 不允许伪造为 yinhe_boshi（避免冒充银蛇博士下发反馈/指令）。
+    // 不允许伪造为 yinshe_boshi（避免冒充银蛇博士下发反馈/指令）。
     // 例外：服务端内部调用（stream-handler 的 extractAndForwardFeedback）
-    // 携带 X-Internal-Service: chat-stream header，允许以 yinhe_boshi 身份发送反馈。
+    // 携带 X-Internal-Service: chat-stream header，允许以 yinshe_boshi 身份发送反馈。
     const internalService = request.headers.get('x-internal-service');
     if (internalService === 'chat-stream') {
-      // 内部服务调用，允许 yinhe_boshi → laxiang_zhushou 的反馈通道
-      if (sender !== 'yinhe_boshi' || receiver !== 'laxiang_zhushou') {
-        return NextResponse.json({ error: '内部服务仅允许 yinhe_boshi 发送反馈' }, { status: 403 });
+      // 内部服务调用，允许 yinshe_boshi → laxiang_zhushou 的反馈通道
+      if (sender !== 'yinshe_boshi' || receiver !== 'laxiang_zhushou') {
+        return NextResponse.json({ error: '内部服务仅允许 yinshe_boshi 发送反馈' }, { status: 403 });
       }
     } else {
       // 外部客户端调用，sender 必须是 laxiang_zhushou
@@ -46,7 +46,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
 
     // 保存消息
     const { data, error } = await client
@@ -64,7 +64,7 @@ export async function POST(request: NextRequest) {
     if (error) throw error;
 
     // 如果是银蛇博士发给蜡象助手的任务反馈，自动提取并存储到知识库
-    if (sender === 'yinhe_boshi' && receiver === 'laxiang_zhushou') {
+    if (sender === 'yinshe_boshi' && receiver === 'laxiang_zhushou') {
       await extractAndStoreFeedback(client, data.id, content, context);
     }
 
@@ -83,7 +83,7 @@ export async function POST(request: NextRequest) {
 
 // 获取消息列表
 export async function GET(request: NextRequest) {
-  const auth = requireAdmin(request);
+  const auth = await requireAdmin(request);
   if (!auth.authenticated) return authError(auth);
 
   try {
@@ -97,7 +97,7 @@ export async function GET(request: NextRequest) {
       return ApiErrors.validation('缺少 agent 参数');
     }
 
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
     
     let query = client
       .from('agent_communications')

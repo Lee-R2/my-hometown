@@ -1,85 +1,63 @@
 import { requireAdmin, authError, safeError } from '@/lib/api-auth';
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import { ApiErrors } from '@/lib/api-error';
 
-// 更新会话
-export async function PUT(
-  request: NextRequest,
-  { params }: { params: Promise<{ sessionId: string }> }
-) {
-  const auth = requireAdmin(request);
-  if (!auth.authenticated) return authError(auth);
-  try {
-    const { sessionId } = await params;
-    const body = await request.json();
-    const { isActive, metadata } = body;
+// 智能体白名单
+const ALLOWED_AGENTS = ['yinshe_boshi', 'laxiang_zhushou'];
 
-    if (!sessionId) {
-      return ApiErrors.validation('缺少会话ID');
+// 搜索记忆
+export async function GET(request: NextRequest) {
+  const auth = await requireAdmin(request);
+  if (!auth.authenticated) return authError(auth);
+
+  try {
+    const { searchParams } = new URL(request.url);
+    const agentUsername = searchParams.get('agentUsername');
+    const keyword = searchParams.get('keyword');
+    const memoryTypes = searchParams.get('types')?.split(',') || [];
+    const minImportance = parseInt(searchParams.get('minImportance') || '1');
+    const limit = parseInt(searchParams.get('limit') || '10');
+
+    // 验证智能体
+    if (!agentUsername || !ALLOWED_AGENTS.includes(agentUsername)) {
+      return ApiErrors.validation('无效的智能体');
     }
 
-    const client = getSupabaseClient();
-    const updates: any = {
-      last_activity_at: new Date().toISOString()
-    };
+    if (!keyword) {
+      return ApiErrors.validation('缺少搜索关键词');
+    }
 
-    if (isActive !== undefined) updates.is_active = isActive;
-    if (metadata !== undefined) updates.metadata = metadata;
+    const client = getSupabaseAdminClient();
 
+    // 使用模糊搜索
     const { data, error } = await client
-      .from('agent_sessions')
-      .update(updates)
-      .eq('session_id', sessionId)
-      .select()
-      .single();
+      .from('agent_memories')
+      .select('*')
+      .eq('agent_username', agentUsername)
+      .eq('is_active', true)
+      .gte('importance', minImportance)
+      .ilike('content', `%${keyword}%`)
+      .order('importance', { ascending: false })
+      .order('updated_at', { ascending: false })
+      .limit(limit);
 
     if (error) throw error;
 
-    return NextResponse.json({
-      success: true,
-      session: data
-    });
-
-  } catch (error: any) {
-    console.error('更新会话失败:', error);
-    return safeError(error);
-  }
-}
-
-// 关闭会话
-export async function DELETE(
-  request: NextRequest,
-  { params }: { params: Promise<{ sessionId: string }> }
-) {
-  const auth = requireAdmin(request);
-  if (!auth.authenticated) return authError(auth);
-
-  try {
-    const { sessionId } = await params;
-
-    if (!sessionId) {
-      return ApiErrors.validation('缺少会话ID');
+    // 过滤记忆类型
+    let filteredData = data || [];
+    if (memoryTypes.length > 0) {
+      filteredData = filteredData.filter(item => memoryTypes.includes(item.memory_type));
     }
 
-    const client = getSupabaseClient();
-    const { error } = await client
-      .from('agent_sessions')
-      .update({
-        is_active: false,
-        last_activity_at: new Date().toISOString()
-      })
-      .eq('session_id', sessionId);
-
-    if (error) throw error;
-
     return NextResponse.json({
       success: true,
-      message: '会话已关闭'
+      memories: filteredData,
+      count: filteredData.length
     });
 
   } catch (error: any) {
-    console.error('关闭会话失败:', error);
+    console.error('搜索记忆失败:', error);
     return safeError(error);
   }
 }

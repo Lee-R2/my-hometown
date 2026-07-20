@@ -31,6 +31,12 @@ export default function AdminLoginPage() {
         body: JSON.stringify({ username, password }),
       });
 
+      // 安全修复 LE-F04: 先检查 res.ok,避免服务端返回 HTML 错误页时 res.json() 抛 SyntaxError
+      if (!res.ok) {
+        setError('服务器错误,请稍后重试');
+        return;
+      }
+
       const data = await res.json();
 
       if (data.success) {

@@ -10,6 +10,7 @@ import { Badge } from '@/components/ui/badge';
 import { ArrowLeft, Key, Users, Save, Eye, EyeOff, Loader2, Star } from 'lucide-react';
 import { toast } from 'sonner';
 import { useScrollPosition } from '@/hooks/use-scroll-position';
+import { safeJSONParse } from '@/lib/utils';
 
 interface TeamInfo {
   id: string;
@@ -45,7 +46,7 @@ export default function TeamSettingsPage() {
       return;
     }
     
-    const teamObj = JSON.parse(teamData);
+    const teamObj = safeJSONParse(teamData, null as any);
     setTeam(teamObj);
   }, [router]);
 

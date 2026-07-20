@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { LLMClient, Config, HeaderUtils } from 'coze-coding-dev-sdk';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import { 
   getOrCreateSession, 
   saveConversation, 
@@ -19,26 +19,7 @@ import { cleanTextForTTS, synthesizeSpeech, segmentTextForTTS } from './lib/tts-
 import { ApiErrors } from '@/lib/api-error';
 import { AI_API_KEY, AI_BASE_URL, AI_MODEL_BASE_URL } from '@/lib/ai-config';
 import { getAppBaseUrl } from '@/lib/app-url';
-
-/**
- * 格式化对话历史的时间标签
- * 让 LLM 感知每条对话的时间远近，避免把旧对话当近期内容主动提及
- */
-function formatConversationTimeLabel(dateStr?: string | null): string {
-  if (!dateStr) return '未知时间';
-  const date = new Date(dateStr);
-  if (isNaN(date.getTime())) return '未知时间';
-  const diffMs = Date.now() - date.getTime();
-  if (diffMs < 0) return '刚刚';
-  const diffMin = Math.floor(diffMs / 60000);
-  const diffHour = Math.floor(diffMin / 60);
-  const diffDay = Math.floor(diffHour / 24);
-  if (diffMin < 1) return '刚刚';
-  if (diffMin < 60) return `${diffMin}分钟前`;
-  if (diffHour < 24) return `${diffHour}小时前`;
-  if (diffDay < 7) return `${diffDay}天前`;
-  return `${Math.floor(diffDay / 7)}周前`;
-}
+import { formatConversationTimeLabel } from '@/lib/time-format';
 
 /**
  * 智能体"蜡象助手"API
@@ -1582,7 +1563,7 @@ const PARENT_SYSTEM_PROMPT = `你是"蜡象助手"，一个专业、友好的STE
 
 
 export async function POST(request: NextRequest) {
-  const auth = requireAnyAuth(request);
+  const auth = await requireAnyAuth(request);
   if (!auth.authenticated) return authError(auth);
   try {
     const body = await request.json();
@@ -1615,7 +1596,7 @@ export async function POST(request: NextRequest) {
     }
 
     // 获取数据库客户端
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
 
     // ===== 智能命令预处理 =====
     // 检测用户是否在询问小队产出情况，如果是，自动执行[查看产出]命令
@@ -2494,8 +2475,8 @@ export async function POST(request: NextRequest) {
                           // 志愿者 → 专属主题，自动匹配对接小学
                           is_exclusive = true;
                           try {
-                            const { getSupabaseClient } = await import('@/storage/database/supabase-client');
-                            const supabase = getSupabaseClient();
+                            const { getSupabaseAdminClient } = await import('@/storage/database/supabase-client');
+                            const supabase = getSupabaseAdminClient();
                             const { data: volunteerUser } = await supabase
                               .from('users')
                               .select('school_id')
@@ -2807,8 +2788,8 @@ export async function POST(request: NextRequest) {
                         }
                         
                         // 获取该主题下的任务
-                        const { getSupabaseClient } = await import('@/storage/database/supabase-client');
-                        const supabase = getSupabaseClient();
+                        const { getSupabaseAdminClient } = await import('@/storage/database/supabase-client');
+                        const supabase = getSupabaseAdminClient();
                         let tasksQuery = supabase
                           .from('tasks')
                           .select('id, title, difficulty, task_group_id, group_name')
@@ -3069,8 +3050,8 @@ export async function POST(request: NextRequest) {
                 if (userRole === 'volunteer') {
                   is_exclusive = true;
                   try {
-                    const { getSupabaseClient } = await import('@/storage/database/supabase-client');
-                    const supabase = getSupabaseClient();
+                    const { getSupabaseAdminClient } = await import('@/storage/database/supabase-client');
+                    const supabase = getSupabaseAdminClient();
                     const { data: volunteerUser } = await supabase
                       .from('users')
                       .select('school_id')
@@ -3339,8 +3320,8 @@ export async function POST(request: NextRequest) {
                     continue;
                   }
                   
-                  const { getSupabaseClient } = await import('@/storage/database/supabase-client');
-                  const supabase = getSupabaseClient();
+                  const { getSupabaseAdminClient } = await import('@/storage/database/supabase-client');
+                  const supabase = getSupabaseAdminClient();
                   let tasksQuery = supabase
                     .from('tasks')
                     .select('id, title, difficulty, task_group_id, group_name')
@@ -3906,7 +3887,7 @@ export async function POST(request: NextRequest) {
             for (const mem of importantMemories) {
               // 如果用户消息中包含该记忆的内容关键词，强化该记忆
               if (mem.content && message && message.includes(mem.content.substring(0, 10))) {
-                await reinforceMemory(mem.id, 0.1);
+                await reinforceMemory(mem.id, 1);
               }
             }
           } catch (reinforceErr) {

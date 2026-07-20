@@ -1,14 +1,14 @@
 import { requireAdminOrVolunteer, authError, safeError } from '@/lib/api-auth';
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import { supabaseErrorResponse, ApiErrors } from '@/lib/api-error';
 
 export async function GET(request: NextRequest) {
-  const auth = requireAdminOrVolunteer(request);
+  const auth = await requireAdminOrVolunteer(request);
   if (!auth.authenticated) return authError(auth);
 
   try {
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
     const { searchParams } = new URL(request.url);
     const category = searchParams.get('category');
 
@@ -37,12 +37,12 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const auth = requireAdminOrVolunteer(request);
+  const auth = await requireAdminOrVolunteer(request);
   if (!auth.authenticated) return authError(auth);
 
   try {
     const body = await request.json();
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
 
     if (body.nature === 'physical' && (body.stock === undefined || body.stock === null || body.stock === '')) {
       return ApiErrors.validation('实物工具必须设置库存数量');

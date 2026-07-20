@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState, useRef } from 'react';
+import { safeGetJSON } from '@/lib/utils';
 import { useRouter } from 'next/navigation';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -93,9 +94,8 @@ export default function AdminVolunteersPage() {
 
   useEffect(() => {
     // 加载当前用户信息
-    const userData = localStorage.getItem('user');
-    if (userData) {
-      const userObj = JSON.parse(userData);
+    const userObj = safeGetJSON<{ id: string; role: string; school_id?: string } | null>('user', null);
+    if (userObj) {
       setCurrentUser(userObj);
       // 助学老师只看自己链接的志愿者
       if (userObj.role === 'teacher' && userObj.id) {

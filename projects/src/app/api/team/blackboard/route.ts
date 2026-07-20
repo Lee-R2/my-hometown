@@ -1,18 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireTeam, authError, safeError } from '@/lib/api-auth';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { requireTeam, authError, safeError, getAuthenticatedClient } from '@/lib/api-auth';
 import { moderateContent } from '@/lib/content-moderation';
 import { uploadFile, generateSignedUrl } from '@/lib/storage-utils';
 import { ApiErrors } from '@/lib/api-error';
 import { isDangerousExtension } from '@/lib/security';
 
-const supabase = getSupabaseClient();
-
 // 获取帖子列表 - 支持排序和按主题筛选
 export async function GET(request: NextRequest) {
-  const auth = requireTeam(request);
+  const auth = await requireTeam(request);
   if (!auth.authenticated) return authError(auth);
   try {
+    const supabase = getAuthenticatedClient(request, auth);
     const searchParams = request.nextUrl.searchParams;
     const teamId = auth.payload?.userId;
     const themeId = searchParams.get('theme_id');
@@ -168,9 +166,10 @@ export async function GET(request: NextRequest) {
 
 // 创建帖子
 export async function POST(request: NextRequest) {
-  const auth = requireTeam(request);
+  const auth = await requireTeam(request);
   if (!auth.authenticated) return authError(auth);
   try {
+    const supabase = getAuthenticatedClient(request, auth);
     const contentType = request.headers.get('content-type') || '';
     const teamId = auth.payload?.userId;
     let themeId: string | null = null;

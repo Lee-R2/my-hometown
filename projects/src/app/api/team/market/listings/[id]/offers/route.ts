@@ -1,79 +1,38 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireTeam, authError, safeError } from '@/lib/api-auth';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
-import { ApiErrors } from '@/lib/api-error';
-import { validateCreateOffer } from '@/lib/market-validation';
-import { CreateOfferInput } from '@/lib/market-types';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
+import { ApiErrors, supabaseErrorResponse } from '@/lib/api-error';
 
-const supabase = getSupabaseClient();
-
-// 对挂单报价（议价 / 兑换响应）
-export async function POST(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const auth = requireTeam(request);
+/**
+ * 获取小队详细信息
+ * 安全修复：team 角色只能查自己的信息，忽略客户端传入的 team_id
+ */
+export async function GET(request: NextRequest) {
+  const auth = await requireTeam(request);
   if (!auth.authenticated) return authError(auth);
-  const teamId = auth.payload!.userId;
-
   try {
-    const { id } = await params;
-    const body = await request.json();
-    const input: CreateOfferInput = body;
+    // 强制使用认证令牌中的 userId，防止横向越权
+    const teamId = auth.payload!.userId;
 
-    const { data: listing, error: getErr } = await supabase
-      .from('cloud_market_listings')
-      .select('*')
-      .eq('id', id)
-      .single();
-    if (getErr || !listing) return ApiErrors.notFound('挂单不存在');
-    if (listing.status !== 'active') return ApiErrors.validation('挂单已不可报价');
-    if (listing.team_id === teamId) return ApiErrors.validation('不能对自己挂单报价');
-
-    const validation = validateCreateOffer(input, listing.listing_type);
-    if (!validation.valid) {
-      return ApiErrors.validation((validation as any).message);
+    if (!teamId) {
+      return ApiErrors.validation('认证令牌无效');
     }
 
-    if (input.offerType === 'barter' && input.offerItemRef) {
-      const { data: userReward } = await supabase
-        .from('user_rewards')
-        .select('id, team_id')
-        .eq('id', input.offerItemRef)
-        .single();
-      if (!userReward || userReward.team_id !== teamId) {
-        return ApiErrors.validation('响应物品不属于当前小队');
-      }
-    }
+    const supabase = getSupabaseAdminClient();
 
-    const { data: offer, error: insertErr } = await supabase
-      .from('cloud_market_offers')
-      .insert({
-        listing_id: id,
-        from_team_id: teamId,
-        offer_type: input.offerType,
-        offer_price: input.offerPrice ?? null,
-        offer_item_type: input.offerItemType || null,
-        offer_item_ref: input.offerItemRef || null,
-        offer_item_name: input.offerItemName || null,
-        offer_quantity: input.offerQuantity ?? 1,
-        status: 'pending',
-      })
-      .select()
+    const { data, error } = await supabase
+      .from('teams')
+      .select('id, code, name, points, heart_shards, heart_gems, created_by, has_completed_pretest, preferred_difficulty')
+      .eq('id', teamId)
       .single();
 
-    if (insertErr) throw insertErr;
+    if (error) {
+      // 安全修复：不直接返回 error.message，避免泄露数据库内部信息
+      // 生产环境返回通用消息，开发环境通过 supabaseErrorResponse 返回调试详情
+      return supabaseErrorResponse(error, '获取小队信息失败');
+    }
 
-    await supabase.from('team_notifications').insert({
-      team_id: listing.team_id,
-      type: 'market_offer_received',
-      title: '收到新报价',
-      content: `你上架的「${listing.item_name}」收到新报价`,
-      is_read: false,
-      extra_data: { offerId: offer.id, listingId: id },
-    });
-
-    return NextResponse.json({ success: true, data: offer });
+    return NextResponse.json({ success: true, data });
   } catch (error: any) {
     return safeError(error);
   }

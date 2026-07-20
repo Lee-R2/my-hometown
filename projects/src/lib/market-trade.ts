@@ -1,4 +1,4 @@
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import { ItemType } from './market-types';
 
 const r1 = (v: number) => Math.round(v * 10) / 10;
@@ -50,7 +50,9 @@ export interface TradeResult {
  * 7. 通知双方
  */
 export async function executeTrade(params: ExecuteTradeParams): Promise<TradeResult> {
-  const supabase = getSupabaseClient();
+  // SEC-001: 市场交易涉及跨小队原子操作(扣买方积分、加卖方积分、转移物品),
+  // anon + 单一用户 token 无法操作其他小队数据,必须用 service_role
+  const supabase = getSupabaseAdminClient();
   const {
     listingId, buyerTeamId, sellerTeamId, tradeType,
     itemType, itemName, quantity, pointsPaid, scope,
@@ -112,12 +114,8 @@ export async function executeTrade(params: ExecuteTradeParams): Promise<TradeRes
       .eq('points', sellerPoints)
       .select('id');
     if (creditErr || !credited || credited.length === 0) {
-      // 回滚买方扣减
-      await supabase
-        .from('teams')
-        .update({ points: buyerPoints })
-        .eq('id', buyerTeamId)
-        .eq('points', newBuyerPoints);
+      // LE-P16: 回滚买方扣减(使用统一的 rollbackPoints 函数,带乐观锁 + 重试)
+      await rollbackPoints(supabase, buyerTeamId, sellerTeamId, pointsPaid);
       return { success: false, errorCode: 'CONFLICT', error: '操作冲突，请重试' };
     }
   }
@@ -194,6 +192,27 @@ export async function executeTrade(params: ExecuteTradeParams): Promise<TradeRes
       if (pointsPaid > 0) await rollbackPoints(supabase, buyerTeamId, sellerTeamId, pointsPaid);
       return { success: false, errorCode: 'OWNERSHIP_CHANGED', error: '作品已售出' };
     }
+    // 安全修复 LE-P04: 先用乐观锁把 submission 标记为 sold,
+    // 防止两个并发买家都通过上面的 status !== 'sold' 检查后,各自都执行 insert 复制 + 标记 sold,
+    // 导致同一作品被重复出售给多个买方。
+    // 这里把"标记 sold"提到 insert 之前,且用 .neq('status', 'sold') 作为乐观锁条件,
+    // 只有第一个并发请求能成功(返回 length === 1),后续请求会拿到 0 行更新。
+    const { data: markSoldResult, error: markSoldErr } = await supabase
+      .from('task_submissions')
+      .update({
+        status: 'sold',
+        sold_at: new Date().toISOString(),
+        sold_to_team_id: buyerTeamId,
+      })
+      .eq('id', sellerItemRef)
+      .neq('status', 'sold')
+      .select('id');
+    if (markSoldErr || !markSoldResult || markSoldResult.length === 0) {
+      // 已被并发请求标记为 sold,本次交易放弃,回滚积分
+      if (pointsPaid > 0) await rollbackPoints(supabase, buyerTeamId, sellerTeamId, pointsPaid);
+      return { success: false, errorCode: 'OWNERSHIP_CHANGED', error: '作品已被并发出售' };
+    }
+    // 标记 sold 成功后再 insert 复制给买方;若 insert 失败需回滚 sold 标记
     const { error: insErr } = await supabase.from('task_submissions').insert({
       team_id: buyerTeamId,
       task_id: submission.task_id,
@@ -204,20 +223,19 @@ export async function executeTrade(params: ExecuteTradeParams): Promise<TradeRes
       source_trade_id: null,
     });
     if (insErr) {
+      // 回滚 sold 标记,恢复原状态
+      await supabase
+        .from('task_submissions')
+        .update({
+          status: submission.status,
+          sold_at: null,
+          sold_to_team_id: null,
+        })
+        .eq('id', sellerItemRef)
+        .eq('status', 'sold');
       if (pointsPaid > 0) await rollbackPoints(supabase, buyerTeamId, sellerTeamId, pointsPaid);
       return { success: false, errorCode: 'INTERNAL', error: '复制作品失败' };
     }
-    // 标记卖方原 submission 为已售，防止无限复制
-    // 注意：需要在数据库中添加 sold_at 和 sold_to_team_id 字段
-    // 迁移文件：supabase/migrations/015_add_sold_fields_to_task_submissions.sql
-    await supabase
-      .from('task_submissions')
-      .update({
-        status: 'sold',
-        sold_at: new Date().toISOString(),
-        sold_to_team_id: buyerTeamId,
-      })
-      .eq('id', sellerItemRef);
   }
 
   // 3b. 兑换场景：买方物品转移给卖方
@@ -292,26 +310,55 @@ export async function executeTrade(params: ExecuteTradeParams): Promise<TradeRes
     .select('id')
     .single();
   if (tradeErr || !trade) {
-    console.error('[market-trade] 写交易记录失败', tradeErr);
+    // LE-P06: 交易记录写入失败时,回滚已执行的积分转移、物品转移和 listing 库存
+    console.error('[market-trade] 写交易记录失败,开始回滚', tradeErr);
+    // 1. 回滚积分
+    if (pointsPaid > 0) {
+      await rollbackPoints(supabase, buyerTeamId, sellerTeamId, pointsPaid);
+    }
+    // 2. 回滚物品转移(把买方刚获得的物品转回卖方)
+    if (sellerItemRef) {
+      const rollbackResult = await transferItem(supabase, itemType, sellerItemRef, buyerTeamId, sellerTeamId, quantity);
+      if (!rollbackResult.success) {
+        console.error('[market-trade] 交易记录失败后物品回滚也失败,存在物品不一致风险:', rollbackResult);
+      }
+    }
+    // 3. 恢复 listing 库存(把刚扣减的 available_quantity 加回去)
+    const { data: currentListing } = await supabase
+      .from('cloud_market_listings')
+      .select('available_quantity, status')
+      .eq('id', listingId)
+      .single();
+    if (currentListing) {
+      const restoredAvail = currentListing.available_quantity + quantity;
+      await supabase
+        .from('cloud_market_listings')
+        .update({ available_quantity: restoredAvail, status: 'active', updated_at: new Date().toISOString() })
+        .eq('id', listingId)
+        .eq('available_quantity', currentListing.available_quantity);
+    }
     return { success: false, errorCode: 'INTERNAL', error: '记录交易失败' };
   }
 
   // 6. 写 point_transactions（仅积分交易）
+  // LE-P16: 加错误处理,避免静默丢失审计记录
   if (pointsPaid > 0) {
-    await supabase.from('point_transactions').insert({
+    const { error: buyerTxError } = await supabase.from('point_transactions').insert({
       team_id: buyerTeamId,
       points: -pointsPaid,
       change_type: 'market_buy',
       related_id: trade.id,
       description: `云朵市集购买 ${itemName} x${quantity}`,
     });
-    await supabase.from('point_transactions').insert({
+    if (buyerTxError) console.error('[market-trade] 写入买方审计记录失败:', buyerTxError);
+    const { error: sellerTxError } = await supabase.from('point_transactions').insert({
       team_id: sellerTeamId,
       points: pointsPaid,
       change_type: 'market_sell',
       related_id: trade.id,
       description: `云朵市集出售 ${itemName} x${quantity}`,
     });
+    if (sellerTxError) console.error('[market-trade] 写入卖方审计记录失败:', sellerTxError);
   }
 
   // 7. 通知双方
@@ -338,13 +385,50 @@ export async function executeTrade(params: ExecuteTradeParams): Promise<TradeRes
 }
 
 async function rollbackPoints(supabase: any, buyerTeamId: string, sellerTeamId: string, pointsPaid: number) {
+  // LE-P05: 回滚也使用乐观锁,防止 TOCTOU(读后写期间另一请求给买方加积分,回滚会用旧快照覆盖丢失)
   const { data: buyer } = await supabase.from('teams').select('points').eq('id', buyerTeamId).single();
   if (buyer) {
-    await supabase.from('teams').update({ points: r1(Number(buyer.points) + pointsPaid) }).eq('id', buyerTeamId);
+    const buyerOldPoints = Number(buyer.points);
+    const buyerNewPoints = r1(buyerOldPoints + pointsPaid);
+    const { data: rb } = await supabase
+      .from('teams')
+      .update({ points: buyerNewPoints })
+      .eq('id', buyerTeamId)
+      .eq('points', buyerOldPoints)
+      .select('id');
+    if (!rb || rb.length === 0) {
+      // 乐观锁失败,重试一次(读取最新值再更新)
+      const { data: freshBuyer } = await supabase.from('teams').select('points').eq('id', buyerTeamId).single();
+      if (freshBuyer) {
+        await supabase
+          .from('teams')
+          .update({ points: r1(Number(freshBuyer.points) + pointsPaid) })
+          .eq('id', buyerTeamId)
+          .eq('points', Number(freshBuyer.points));
+      }
+    }
   }
   const { data: seller } = await supabase.from('teams').select('points').eq('id', sellerTeamId).single();
   if (seller) {
-    await supabase.from('teams').update({ points: r1(Number(seller.points) - pointsPaid) }).eq('id', sellerTeamId);
+    const sellerOldPoints = Number(seller.points);
+    const sellerNewPoints = r1(sellerOldPoints - pointsPaid);
+    const { data: rs } = await supabase
+      .from('teams')
+      .update({ points: sellerNewPoints })
+      .eq('id', sellerTeamId)
+      .eq('points', sellerOldPoints)
+      .select('id');
+    if (!rs || rs.length === 0) {
+      // 乐观锁失败,重试一次
+      const { data: freshSeller } = await supabase.from('teams').select('points').eq('id', sellerTeamId).single();
+      if (freshSeller) {
+        await supabase
+          .from('teams')
+          .update({ points: r1(Number(freshSeller.points) - pointsPaid) })
+          .eq('id', sellerTeamId)
+          .eq('points', Number(freshSeller.points));
+      }
+    }
   }
 }
 
@@ -385,6 +469,19 @@ async function transferItem(
       .eq('id', itemRef)
       .single();
     if (!submission) return { success: false, error: '归属变更' };
+    // 安全修复 LE-P04: 同样使用 .neq('status', 'sold') 乐观锁防止重复出售
+    if (submission.status === 'sold') return { success: false, error: '作品已售出' };
+    const { data: markResult } = await supabase
+      .from('task_submissions')
+      .update({
+        status: 'sold',
+        sold_at: new Date().toISOString(),
+        sold_to_team_id: toTeamId,
+      })
+      .eq('id', itemRef)
+      .neq('status', 'sold')
+      .select('id');
+    if (!markResult || markResult.length === 0) return { success: false, error: '作品已被并发出售' };
     await supabase.from('task_submissions').insert({
       team_id: toTeamId,
       task_id: submission.task_id,

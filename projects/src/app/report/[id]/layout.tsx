@@ -1,4 +1,4 @@
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import type { Metadata } from 'next';
 
 export async function generateMetadata({
@@ -8,7 +8,9 @@ export async function generateMetadata({
 }): Promise<Metadata> {
   try {
     const { id } = await params;
-    const client = getSupabaseClient();
+    // SEC-001: generateMetadata 运行在服务端无 request 上下文，且为公开报告页生成 OG 元数据，
+    // 需跨表读取 theme_completions/teams/task_themes，使用 admin client 确保数据可读
+    const client = getSupabaseAdminClient();
 
     const { data: completion } = await client
       .from('theme_completions')

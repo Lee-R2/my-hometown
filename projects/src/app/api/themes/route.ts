@@ -1,18 +1,21 @@
 import { requireAnyAuth, requireAdminOrVolunteer, authError, safeError } from '@/lib/api-auth';
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import { supabaseErrorResponse, ApiErrors } from '@/lib/api-error';
 
 export async function GET(request: NextRequest) {
-  const auth = requireAnyAuth(request);
+  const auth = await requireAnyAuth(request);
   if (!auth.authenticated) return authError(auth);
 
   try {
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
 
     const { searchParams } = new URL(request.url);
-    const teamId = searchParams.get('teamId'); // 当前小队ID
+    const teamIdParam = searchParams.get('teamId'); // 当前小队ID
     const volunteerId = searchParams.get('volunteerId'); // 志愿者ID
+
+    // LE-A16: 小队身份强制使用认证 userId,防止查看其他小队的主题进度
+    const teamId = auth.payload!.role === 'team' ? auth.payload!.userId : teamIdParam;
 
     // 查询当前小队信息
     let currentTeamCycle: number = 1;
@@ -432,7 +435,7 @@ export async function GET(request: NextRequest) {
 
 // ===== 创建主题 =====
 export async function POST(request: NextRequest) {
-  const auth = requireAdminOrVolunteer(request);
+  const auth = await requireAdminOrVolunteer(request);
   if (!auth.authenticated) return authError(auth);
 
   try {
@@ -449,7 +452,7 @@ export async function POST(request: NextRequest) {
       return ApiErrors.validation('请输入主题名称');
     }
 
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
 
     console.log('[创建主题] 查询创建者 ID:', createdBy);
 

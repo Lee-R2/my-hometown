@@ -1,7 +1,7 @@
 import { requireAnyAuth, authError, safeError } from '@/lib/api-auth';
 import { supabaseErrorResponse, ApiErrors } from '@/lib/api-error';
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 
 /**
  * 智能体数据上下文 API
@@ -9,7 +9,7 @@ import { getSupabaseClient } from '@/storage/database/supabase-client';
  */
 
 export async function GET(request: NextRequest) {
-  const auth = requireAnyAuth(request);
+  const auth = await requireAnyAuth(request);
   if (!auth.authenticated) return authError(auth);
 
   try {
@@ -18,7 +18,7 @@ export async function GET(request: NextRequest) {
     const userRole = searchParams.get('userRole');
     const teamId = searchParams.get('teamId'); // 小队端使用
     
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
 
     // 小队端数据上下文（银蛇博士使用）
     if (teamId && !userId) {

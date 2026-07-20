@@ -1,41 +1,47 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireTeam, authError, safeError } from '@/lib/api-auth';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
-import { supabaseErrorResponse, ApiErrors } from '@/lib/api-error';
+import { requireTeam, authError, safeError, getAuthenticatedClient } from '@/lib/api-auth';
+import { ApiErrors } from '@/lib/api-error';
 
 /**
- * 标记单条通知为已读
+ * 获取未读通知数量
+ * GET /api/team/notifications/unread-count?teamId=xxx
  */
-export async function PUT(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const auth = requireTeam(request);
+export async function GET(request: NextRequest) {
+  const auth = await requireTeam(request);
   if (!auth.authenticated) return authError(auth);
   try {
-    const client = getSupabaseClient();
-    const { id } = await params;
-    const body = await request.json();
+    const client = getAuthenticatedClient(request, auth);
     const teamId = auth.payload!.userId;
 
     if (!teamId) {
       return ApiErrors.validation('认证令牌无效');
     }
 
-    const { error } = await client
+    // 获取总未读数
+    const { count: totalCount } = await client
       .from('team_notifications')
-      .update({ is_read: true })
-      .eq('id', id)
-      .eq('team_id', teamId);
+      .select('*', { count: 'exact', head: true })
+      .eq('team_id', teamId)
+      .eq('is_read', false);
 
-    if (error) {
-      console.error('标记已读失败:', error);
-      return supabaseErrorResponse(error, '标记已读失败');
-    }
+    // 按类型分组统计
+    const { data: typeCounts } = await client
+      .from('team_notifications')
+      .select('type')
+      .eq('team_id', teamId)
+      .eq('is_read', false);
 
-    return NextResponse.json({ success: true });
+    const countsByType: Record<string, number> = {};
+    (typeCounts || []).forEach((item: { type: string }) => {
+      countsByType[item.type] = (countsByType[item.type] || 0) + 1;
+    });
+
+    return NextResponse.json({
+      total: totalCount || 0,
+      byType: countsByType,
+    });
   } catch (error) {
-    console.error('标记已读错误:', error);
+    console.error('获取未读数量错误:', error);
     return safeError(error);
   }
 }

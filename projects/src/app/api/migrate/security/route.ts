@@ -1,6 +1,6 @@
 import { requireAdmin, authError, safeError } from '@/lib/api-auth';
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 
 /**
  * 执行数据库迁移
@@ -8,11 +8,15 @@ import { getSupabaseClient } from '@/storage/database/supabase-client';
  */
 
 export async function POST(request: NextRequest) {
-  const auth = requireAdmin(request);
+  // SEC-006: 迁移接口不应在生产环境暴露,即使有 requireAdmin 保护
+  if (process.env.NODE_ENV === 'production') {
+    return NextResponse.json({ error: 'Not Found' }, { status: 404 });
+  }
+  const auth = await requireAdmin(request);
   if (!auth.authenticated) return authError(auth);
 
   try {
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
     const results = [];
 
     // 1. 创建用户会话表
@@ -256,11 +260,11 @@ export async function POST(request: NextRequest) {
  * 查询迁移状态
  */
 export async function GET(request: NextRequest) {
-  const auth = requireAdmin(request);
+  const auth = await requireAdmin(request);
   if (!auth.authenticated) return authError(auth);
 
   try {
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
 
     // 检查表是否存在
     const tables = [

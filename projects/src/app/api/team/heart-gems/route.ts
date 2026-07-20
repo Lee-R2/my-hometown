@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireTeam, authError, safeError } from '@/lib/api-auth';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { requireTeam, authError, safeError, getAuthenticatedClient } from '@/lib/api-auth';
 import { ApiErrors } from '@/lib/api-error';
 
 export async function GET(request: NextRequest) {
-  const auth = requireTeam(request);
+  const auth = await requireTeam(request);
   if (!auth.authenticated) return authError(auth);
   try {
     // 强制使用认证令牌中的 userId，防止横向越权
@@ -14,7 +13,7 @@ export async function GET(request: NextRequest) {
       return ApiErrors.validation('认证令牌无效');
     }
 
-    const client = getSupabaseClient();
+    const client = getAuthenticatedClient(request, auth);
 
     // 从 teams 表读取权威的碎片和宝石数据（heart_gems 表的 fragments/gems 从未被写入）
     const { data: teamData, error: teamError } = await client

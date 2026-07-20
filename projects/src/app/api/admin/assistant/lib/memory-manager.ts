@@ -2,9 +2,17 @@
  * 记忆管理模块
  * 统一管理蜡象助手的记忆系统
  * 整合了跨智能体数据交流、用户记忆、风格偏好等逻辑
+ *
+ * LE-M16 修复: 此前本模块使用 agent_id/scope_type/scope_id/team_id 等列名,
+ * 与 agent_memories 表实际 schema (agent_username/context_key/context_value) 不一致,
+ * 导致所有写入/查询静默失败。已统一为正确 schema,并加入 ALLOWED_AGENTS 白名单
+ * 与 @/lib/agent-memory.ts 保持一致。importance 统一为整数 (1-10)。
  */
 
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
+
+// 智能体白名单 (与 @/lib/agent-memory.ts 保持一致)
+const ALLOWED_AGENTS = ['yinshe_boshi', 'laxiang_zhushou'];
 
 // 跨智能体共享的记忆类型
 const YINSHE_SHAREABLE_TYPES = [
@@ -24,7 +32,7 @@ export async function resolveTeamScope(userId: string, userRole: string): Promis
   teamNames: string[];
   scopeDescription: string;
 }> {
-  const client = getSupabaseClient();
+  const client = getSupabaseAdminClient();
 
   if (userRole === 'admin' || userRole === 'super_admin') {
     const { data: teams } = await client
@@ -72,13 +80,19 @@ export async function resolveTeamScope(userId: string, userRole: string): Promis
 
 /**
  * 获取跨智能体记忆
+ * LE-M16: 修复 schema,使用 agent_username + context_key='team_id' + context_value IN teamIds
  */
 export async function getCrossAgentMemories(
-  agentId: string,
+  agentUsername: string,
   teamIds: string[],
   options: { memoryTypes?: string[]; limit?: number } = {}
 ): Promise<Map<string, any[]>> {
-  const client = getSupabaseClient();
+  if (!ALLOWED_AGENTS.includes(agentUsername)) {
+    console.error('[记忆管理] 无效的智能体:', agentUsername);
+    return new Map();
+  }
+
+  const client = getSupabaseAdminClient();
   const { memoryTypes = [], limit = 60 } = options;
   const result = new Map<string, any[]>();
 
@@ -90,9 +104,12 @@ export async function getCrossAgentMemories(
     let query = client
       .from('agent_memories')
       .select('*')
-      .eq('agent_id', agentId)
-      .in('team_id', teamIds)
+      .eq('agent_username', agentUsername)
+      .eq('context_key', 'team_id')
+      .in('context_value', teamIds)
+      .eq('is_active', true)
       .or(`expires_at.is.null,expires_at.gt.${nowIso}`)
+      .order('importance', { ascending: false })
       .order('created_at', { ascending: false })
       .limit(limit);
 
@@ -103,7 +120,7 @@ export async function getCrossAgentMemories(
     const { data: memories } = await query;
 
     (memories || []).forEach((m: any) => {
-      const teamId = m.team_id;
+      const teamId = m.context_value;
       if (!result.has(teamId)) {
         result.set(teamId, []);
       }
@@ -151,26 +168,41 @@ export function formatCrossAgentMemories(
 
 /**
  * 添加记忆
+ * LE-M16: 修复 schema,使用 agent_username/context_key/context_value,加入白名单校验
  */
 export async function addMemory(
-  agentName: string,
+  agentUsername: string,
   memoryType: string,
   content: string,
-  scopeType: string,
-  scopeId: string,
-  importance?: number
+  contextKey: string,
+  contextValue: string,
+  importance: number = 5
 ): Promise<void> {
-  const client = getSupabaseClient();
+  if (!ALLOWED_AGENTS.includes(agentUsername)) {
+    console.error('[记忆管理] 无效的智能体:', agentUsername);
+    return;
+  }
+
+  const client = getSupabaseAdminClient();
 
   try {
+    // LE-M06: 短期记忆类型设置 24h 过期时间,与系统提示词声明一致
+    // 此处 memoryType 为 string,不能与 MemoryType 类型比较,用字符串字面量匹配
+    const shortTermTypes = ['task_progress', 'user_intent', 'L1', 'short_term'];
+    const expiresAt = shortTermTypes.includes(memoryType)
+      ? new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
+      : null;
     await client.from('agent_memories').insert({
-      agent_id: agentName,
+      agent_username: agentUsername,
       memory_type: memoryType,
       content,
-      scope_type: scopeType,
-      scope_id: scopeId,
-      importance: importance ?? 5,
-      created_at: new Date().toISOString(),
+      context_key: contextKey,
+      context_value: contextValue,
+      importance,
+      is_active: true,
+      expires_at: expiresAt,
+      last_accessed_at: new Date().toISOString(),
+      access_count: 0,
     });
   } catch (error) {
     console.error('[记忆管理] 添加记忆失败:', error);
@@ -298,6 +330,7 @@ export function buildMemoryContext(options: {
 /**
  * 自动总结对话关键信息并存储为记忆
  * 在每次对话结束后调用，提取关键信息
+ * LE-M16: 修复 schema,使用 agent_username/context_key/context_value,integer importance
  */
 export async function autoSummarizeConversation(
   userId: string,
@@ -305,36 +338,59 @@ export async function autoSummarizeConversation(
   userMessage: string,
   assistantMessage: string
 ): Promise<void> {
-  const client = getSupabaseClient();
-  
+  const client = getSupabaseAdminClient();
+
   try {
     // 提取关键信息模式
     const patterns = [
       // 用户偏好
-      { regex: /我喜欢(.{2,20})(?:的方式|风格|格式)/, type: 'preference', category: 'preference' },
-      { regex: /请(.{2,10})(?:回复|回答|呈现)/, type: 'preference', category: 'preference' },
+      { regex: /我喜欢(.{2,20})(?:的方式|风格|格式)/, type: 'preference' },
+      { regex: /请(.{2,10})(?:回复|回答|呈现)/, type: 'preference' },
       // 工作关注点
-      { regex: /关注(.{2,20})(?:的情况|进度|状态)/, type: 'work_concern', category: 'work_concern' },
-      { regex: /(.{2,20})怎么样了/, type: 'work_concern', category: 'work_concern' },
+      { regex: /关注(.{2,20})(?:的情况|进度|状态)/, type: 'work_concern' },
+      { regex: /(.{2,20})怎么样了/, type: 'work_concern' },
       // 审核偏好
-      { regex: /审核标准(?:是|为)(.{2,30})/, type: 'review_style', category: 'review_style' },
-      { regex: /评价(?:时|的时候)(.{2,30})/, type: 'review_style', category: 'review_style' },
+      { regex: /审核标准(?:是|为)(.{2,30})/, type: 'review_style' },
+      { regex: /评价(?:时|的时候)(.{2,30})/, type: 'review_style' },
     ];
-    
+
     for (const pattern of patterns) {
       const match = userMessage.match(pattern.regex);
       if (match) {
-        await client.from('agent_memories').upsert({
-          agent_id: 'laxiang_zhushou',
-          memory_type: pattern.type,
-          content: match[1],
-          scope_type: 'user_id',
-          scope_id: userId,
-          importance: 0.7,
-          created_at: new Date().toISOString(),
-        }, {
-          onConflict: 'agent_id,memory_type,scope_type,scope_id',
-        });
+        // 检查是否已存在相同记忆
+        const { data: existing } = await client
+          .from('agent_memories')
+          .select('id')
+          .eq('agent_username', 'laxiang_zhushou')
+          .eq('memory_type', pattern.type)
+          .eq('context_key', 'user_id')
+          .eq('context_value', userId)
+          .eq('is_active', true)
+          .maybeSingle();
+
+        if (existing) {
+          // 更新已有记忆
+          await client
+            .from('agent_memories')
+            .update({
+              content: match[1],
+              importance: 7,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', existing.id);
+        } else {
+          await client.from('agent_memories').insert({
+            agent_username: 'laxiang_zhushou',
+            memory_type: pattern.type,
+            content: match[1],
+            context_key: 'user_id',
+            context_value: userId,
+            importance: 7,
+            is_active: true,
+            last_accessed_at: new Date().toISOString(),
+            access_count: 0,
+          });
+        }
       }
     }
   } catch (error) {
@@ -345,26 +401,29 @@ export async function autoSummarizeConversation(
 /**
  * 获取记忆并按重要性排序
  * 重要性高的记忆优先展示
+ * LE-M16: 修复 schema,使用 context_key='user_id' + context_value=userId
  */
 export async function getMemoriesByImportance(
   userId: string,
   limit: number = 20
 ): Promise<any[]> {
-  const client = getSupabaseClient();
-  
+  const client = getSupabaseAdminClient();
+
   try {
     // 过滤已过期的 L1 短期记忆
     const nowIso = new Date().toISOString();
     const { data: memories } = await client
       .from('agent_memories')
       .select('*')
-      .eq('scope_type', 'user_id')
-      .eq('scope_id', userId)
+      .eq('agent_username', 'laxiang_zhushou')
+      .eq('context_key', 'user_id')
+      .eq('context_value', userId)
+      .eq('is_active', true)
       .or(`expires_at.is.null,expires_at.gt.${nowIso}`)
       .order('importance', { ascending: false, nullsFirst: false })
       .order('created_at', { ascending: false })
       .limit(limit);
-    
+
     return memories || [];
   } catch (error) {
     console.error('[记忆管理] 获取记忆失败:', error);
@@ -374,13 +433,14 @@ export async function getMemoriesByImportance(
 
 /**
  * 强化记忆 — 当用户再次提及某记忆相关内容时，提升其重要性
+ * LE-M16: 使用 integer importance (1-10),boost 默认 1,上限 10
  */
 export async function reinforceMemory(
   memoryId: string,
-  boost: number = 0.1
+  boost: number = 1
 ): Promise<void> {
-  const client = getSupabaseClient();
-  
+  const client = getSupabaseAdminClient();
+
   try {
     // 先获取当前重要性
     const { data: memory } = await client
@@ -388,12 +448,15 @@ export async function reinforceMemory(
       .select('importance')
       .eq('id', memoryId)
       .single();
-    
+
     if (memory) {
-      const newImportance = Math.min((memory.importance || 0.5) + boost, 1.0);
+      const newImportance = Math.min((memory.importance || 5) + boost, 10);
       await client
         .from('agent_memories')
-        .update({ importance: newImportance })
+        .update({
+          importance: newImportance,
+          updated_at: new Date().toISOString(),
+        })
         .eq('id', memoryId);
     }
   } catch (error) {

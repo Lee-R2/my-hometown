@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import { authenticateRequest, authError, safeError } from '@/lib/api-auth';
 import { ApiErrors } from '@/lib/api-error';
 
@@ -10,7 +10,7 @@ import { ApiErrors } from '@/lib/api-error';
  */
 export async function GET(request: NextRequest) {
   // 认证：仅允许 admin/volunteer/teacher 角色
-  const auth = authenticateRequest(request, {
+  const auth = await authenticateRequest(request, {
     requiredRoles: ['super_admin', 'admin', 'volunteer', 'teacher'],
   });
   if (!auth.authenticated) return authError(auth);
@@ -20,7 +20,7 @@ export async function GET(request: NextRequest) {
     const callerId = auth.payload!.userId;
     const callerRole = auth.payload!.role;
 
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
 
     // 获取小队有截止日期且已过期的数量
     let teamQuery = client

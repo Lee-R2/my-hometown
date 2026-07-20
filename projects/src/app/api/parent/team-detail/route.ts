@@ -1,14 +1,13 @@
-import { requireParent, authError, safeError } from '@/lib/api-auth';
+import { requireParent, authError, safeError, getAuthenticatedClient } from '@/lib/api-auth';
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
 import { ApiErrors } from '@/lib/api-error';
-
-const supabase = getSupabaseClient();
 
 // 获取小队详细信息
 export async function GET(request: NextRequest) {
-  const auth = requireParent(request);
+  const auth = await requireParent(request);
   if (!auth.authenticated) return authError(auth);
+
+  const supabase = getAuthenticatedClient(request, auth);
 
   try {
     const { searchParams } = new URL(request.url);

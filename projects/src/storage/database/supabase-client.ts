@@ -116,8 +116,21 @@ let adminClientSingleton: SupabaseClient | null = null;
 let anonClientSingleton: SupabaseClient | null = null;
 const tokenClientCache = new Map<string, SupabaseClient>();
 
+/**
+ * SEC-001 安全修复：默认返回 anon client（RLS 生效）。
+ *
+ * 历史问题：本函数原默认委托给 getSupabaseAdminClient，使用 service_role key
+ * 绕过所有 RLS 策略，导致数据库行级安全形同虚设。
+ *
+ * 修复后：默认返回 anon client。所有需要 service_role 权限的调用方必须显式
+ * 使用 getSupabaseAdminClient；需要绑定用户身份的调用方使用
+ * getAuthenticatedClient(request, auth)（见 @/lib/api-auth.ts）。
+ *
+ * 这是防御性默认：任何新代码不小心调用 getSupabaseClient() 都会得到
+ * 受 RLS 保护的安全客户端，而非危险的 admin 客户端。
+ */
 function getSupabaseClient(token?: string): SupabaseClient {
-  return getSupabaseAdminClient(token);
+  return getSupabaseAnonClient(token);
 }
 
 function getSupabaseAnonClient(token?: string): SupabaseClient {

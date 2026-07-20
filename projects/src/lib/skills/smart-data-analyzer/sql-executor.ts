@@ -69,8 +69,8 @@ export async function execSqlSafe(sql: string): Promise<QueryResult> {
  */
 async function execSqlViaSupabase(sql: string): Promise<QueryResult> {
   try {
-    const { getSupabaseClient } = await import('@/storage/database/supabase-client');
-    const supabase = getSupabaseClient();
+    const { getSupabaseAdminClient } = await import('@/storage/database/supabase-client');
+    const supabase = getSupabaseAdminClient();
 
     // 尝试 rpc 执行
     const { data, error } = await supabase.rpc('exec_safe_sql', { query_text: sql });
@@ -122,7 +122,7 @@ async function execSqlViaSupabase(sql: string): Promise<QueryResult> {
 
 /** 解析简单 SELECT 并用 Supabase JS API 查询 */
 async function execSimpleSqlViaSupabaseJS(
-  supabase: ReturnType<typeof import('@/storage/database/supabase-client')['getSupabaseClient']>,
+  supabase: ReturnType<typeof import('@/storage/database/supabase-client')['getSupabaseAdminClient']>,
   sql: string
 ): Promise<QueryResult> {
   const parsed = parseSimpleSelect(sql);

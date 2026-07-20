@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireTeam, authError, safeError } from '@/lib/api-auth';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import { ApiErrors } from '@/lib/api-error';
 
-const supabase = getSupabaseClient();
+const supabase = getSupabaseAdminClient();
 
 // 获取可借用的小队列表（同志愿者下的其他小队）
 export async function GET(request: NextRequest) {
-  const auth = requireTeam(request);
+  const auth = await requireTeam(request);
   if (!auth.authenticated) return authError(auth);
   // 强制使用认证令牌中的 userId，防止横向越权
   const teamId = auth.payload!.userId;
@@ -46,7 +46,7 @@ export async function GET(request: NextRequest) {
 
 // 创建借用申请
 export async function POST(request: NextRequest) {
-  const auth = requireTeam(request);
+  const auth = await requireTeam(request);
   if (!auth.authenticated) return authError(auth);
   try {
     const body = await request.json();
@@ -181,7 +181,7 @@ export async function POST(request: NextRequest) {
 
 // 同意借用申请
 export async function PUT(request: NextRequest) {
-  const auth = requireTeam(request);
+  const auth = await requireTeam(request);
   if (!auth.authenticated) return authError(auth);
   try {
     const body = await request.json();
@@ -212,14 +212,23 @@ export async function PUT(request: NextRequest) {
     }
 
     if (action === 'reject') {
-      // 拒绝申请，记录拒绝原因
-      await supabase
+      // LE-P10: 拒绝申请,带乐观锁防止并发处理(状态已是非 pending 时拒绝)
+      const { data: rejectResult, error: rejectError } = await supabase
         .from('point_borrows')
-        .update({ 
+        .update({
           status: 'rejected',
           rejection_reason: rejection_reason || null
         })
-        .eq('id', borrow_id);
+        .eq('id', borrow_id)
+        .eq('status', 'pending')
+        .select('id');
+
+      if (rejectError || !rejectResult || rejectResult.length === 0) {
+        return NextResponse.json(
+          { success: false, error: '该申请已被并发处理，请刷新后重试' },
+          { status: 409 }
+        );
+      }
 
       // 通知借入方被拒绝
       await supabase.from('team_notifications').insert({
@@ -231,9 +240,9 @@ export async function PUT(request: NextRequest) {
         extra_data: { borrowId: borrow_id, lenderName: borrowRecord.lender?.name }
       });
 
-      return NextResponse.json({ 
-        success: true, 
-        message: rejection_reason ? '已拒绝，并发送了拒绝原因' : '已拒绝借用申请' 
+      return NextResponse.json({
+        success: true,
+        message: rejection_reason ? '已拒绝，并发送了拒绝原因' : '已拒绝借用申请'
       });
     }
 
@@ -320,17 +329,33 @@ export async function PUT(request: NextRequest) {
         .select('id');
 
       if (statusError || !statusUpdate || statusUpdate.length === 0) {
-        // 状态已被并发请求处理，需回滚积分转移
-        await supabase
+        // LE-P11: 状态已被并发请求处理，需回滚积分转移(带 .select('id') 验证)
+        const rbLender = await supabase
           .from('teams')
           .update({ points: lenderTeam.points })
           .eq('id', borrowRecord.lender_id)
-          .eq('points', lenderTeam.points - borrowPointsInt);
-        await supabase
+          .eq('points', lenderTeam.points - borrowPointsInt)
+          .select('id');
+        if (!rbLender.data || rbLender.data.length === 0) {
+          console.error('[borrow/approve] 回滚借出方积分失败,可能产生积分差异', {
+            lenderId: borrowRecord.lender_id,
+            expectedPoints: lenderTeam.points,
+            deductedPoints: lenderTeam.points - borrowPointsInt,
+          });
+        }
+        const rbBorrower = await supabase
           .from('teams')
           .update({ points: borrowerCurrentPoints })
           .eq('id', borrowRecord.borrower_id)
-          .eq('points', borrowerCurrentPoints + borrowPointsInt);
+          .eq('points', borrowerCurrentPoints + borrowPointsInt)
+          .select('id');
+        if (!rbBorrower.data || rbBorrower.data.length === 0) {
+          console.error('[borrow/approve] 回滚借入方积分失败,可能产生积分差异', {
+            borrowerId: borrowRecord.borrower_id,
+            expectedPoints: borrowerCurrentPoints,
+            creditedPoints: borrowerCurrentPoints + borrowPointsInt,
+          });
+        }
         return NextResponse.json(
           { success: false, error: '该申请已被并发处理，请刷新后重试' },
           { status: 409 }

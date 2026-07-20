@@ -101,7 +101,7 @@ const roleDevelopmentPaths: Record<string, { stage1: string; stage2: string; sta
 
 // GET: 获取小队的AI素养评估结果
 export async function GET(request: NextRequest) {
-  const auth = requireTeam(request);
+  const auth = await requireTeam(request);
   if (!auth.authenticated) return authError(auth);
   try {
     // 强制使用认证令牌中的 userId，防止横向越权

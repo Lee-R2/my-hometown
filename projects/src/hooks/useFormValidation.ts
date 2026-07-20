@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import { validateField, ValidationRule, ValidationResult } from '@/lib/validation';
 
 export interface FormFieldConfig {
@@ -47,19 +47,33 @@ export function useFormValidation<T extends Record<string, string>>(
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [touched, setTouched] = useState<Record<string, boolean>>({});
 
+  // LE-F08: 用 ref 跟踪 errors/touched/values,避免 callback 频繁重建导致表单 re-render
+  const errorsRef = useRef(errors);
+  const touchedRef = useRef(touched);
+  const valuesRef = useRef(values);
+  useEffect(() => {
+    errorsRef.current = errors;
+  }, [errors]);
+  useEffect(() => {
+    touchedRef.current = touched;
+  }, [touched]);
+  useEffect(() => {
+    valuesRef.current = values;
+  }, [values]);
+
   // 设置单个字段值
   const setValue = useCallback((field: keyof T, value: string) => {
     setValuesState(prev => ({ ...prev, [field]: value }));
-    
+
     // 如果配置了实时验证，验证该字段
     const fieldConfig = options.fields[field as string];
-    if (fieldConfig?.validateOnChange && touched[field as string]) {
+    if (fieldConfig?.validateOnChange && touchedRef.current[field as string]) {
       const result = validateField(value, fieldConfig.rules);
       setErrors(prev => ({
         ...prev,
         [field]: result.isValid ? '' : result.message,
       }));
-    } else if (errors[field as string]) {
+    } else if (errorsRef.current[field as string]) {
       // 清除已有错误（如果值已改变）
       setErrors(prev => {
         const newErrors = { ...prev };
@@ -67,7 +81,7 @@ export function useFormValidation<T extends Record<string, string>>(
         return newErrors;
       });
     }
-  }, [options.fields, touched, errors]);
+  }, [options.fields]);
 
   // 批量设置值
   const setValues = useCallback((newValues: Partial<T>) => {
@@ -81,16 +95,16 @@ export function useFormValidation<T extends Record<string, string>>(
       return { isValid: true, message: '' };
     }
 
-    const value = values[field as string] || '';
+    const value = valuesRef.current[field as string] || '';
     const result = validateField(value, fieldConfig.rules);
-    
+
     setErrors(prev => ({
       ...prev,
       [field]: result.isValid ? '' : result.message,
     }));
 
     return result;
-  }, [values, options.fields]);
+  }, [options.fields]);
 
   // 验证整个表单
   const validateForm = useCallback((): boolean => {
@@ -98,9 +112,9 @@ export function useFormValidation<T extends Record<string, string>>(
     let isValid = true;
 
     for (const [field, config] of Object.entries(options.fields)) {
-      const value = values[field] || '';
+      const value = valuesRef.current[field] || '';
       const result = validateField(value, config.rules);
-      
+
       if (!result.isValid) {
         newErrors[field] = result.message;
         isValid = false;
@@ -108,7 +122,7 @@ export function useFormValidation<T extends Record<string, string>>(
     }
 
     setErrors(newErrors);
-    
+
     // 标记所有字段为已触碰
     const allTouched: Record<string, boolean> = {};
     for (const field of Object.keys(options.fields)) {
@@ -117,7 +131,7 @@ export function useFormValidation<T extends Record<string, string>>(
     setTouched(allTouched);
 
     return isValid;
-  }, [values, options.fields]);
+  }, [options.fields]);
 
   // 处理失焦事件
   const handleBlur = useCallback((field: keyof T) => {

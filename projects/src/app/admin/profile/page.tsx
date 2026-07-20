@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { safeGetJSON } from '@/lib/utils';
 import { useRouter } from 'next/navigation';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -38,13 +39,11 @@ export default function ProfilePage() {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
   useEffect(() => {
-    const userData = localStorage.getItem('user');
-    if (!userData) {
+    const userObj = safeGetJSON<UserInfo | null>('user', null);
+    if (!userObj) {
       router.push('/');
       return;
     }
-    
-    const userObj = JSON.parse(userData);
     setUser(userObj);
   }, [router]);
 

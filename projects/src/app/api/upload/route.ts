@@ -7,7 +7,7 @@ import { isDangerousExtension } from '@/lib/security';
 
 // 图片上传API（支持图片和视频）
 export async function POST(request: NextRequest) {
-  const auth = requireAnyAuth(request);
+  const auth = await requireAnyAuth(request);
   if (!auth.authenticated) return authError(auth);
 
   // 频率限制：每小时最多20次上传

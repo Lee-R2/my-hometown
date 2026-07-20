@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import { requireAdmin, authError, safeError } from '@/lib/api-auth';
 import { ApiErrors } from '@/lib/api-error';
 
@@ -37,11 +37,11 @@ async function sendNotification(client: any, params: {
  * 支持：extend（延期扣分）和 skip（跳过任务）
  */
 export async function POST(request: NextRequest) {
-  const auth = requireAdmin(request);
+  const auth = await requireAdmin(request);
   if (!auth.authenticated) return authError(auth);
 
   try {
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
     const body = await request.json();
 
     const {
@@ -102,18 +102,28 @@ export async function POST(request: NextRequest) {
     if (action === 'extend') {
       // ========== 延期扣分逻辑 ==========
       const deduction = Math.min(pointDeduction, task.points); // 扣分不能超过任务基础分
-      
+
       // 更新小队积分（扣除）和截止日期
+      // LE-P17: 加乐观锁防止并发扣分导致超扣;失败时返回 409 让管理员重试
       const newPoints = Math.max(0, (team.points || 0) - deduction);
-      
-      await client
+
+      const { data: deductResult, error: deductError } = await client
         .from('teams')
-        .update({ 
+        .update({
           points: newPoints,
           next_task_deadline: newDeadline,
           updated_at: new Date().toISOString()
         })
-        .eq('id', teamId);
+        .eq('id', teamId)
+        .eq('points', team.points || 0)
+        .select('id');
+
+      if (deductError || !deductResult || deductResult.length === 0) {
+        return NextResponse.json(
+          { success: false, error: '操作冲突，请刷新后重试' },
+          { status: 409 }
+        );
+      }
       
       // 记录超时处理
       await client
@@ -215,14 +225,23 @@ export async function POST(request: NextRequest) {
       }
       
       // 更新小队当前任务
-      await client
+      // LE-P18: 带乐观锁 + .select('id') 验证,防止并发处理导致任务状态不一致
+      const { data: taskUpdateResult, error: taskUpdateError } = await client
         .from('teams')
-        .update({ 
+        .update({
           current_task_id: nextTaskId,
           next_task_deadline: nextTaskDeadline || null,
           updated_at: new Date().toISOString()
         })
-        .eq('id', teamId);
+        .eq('id', teamId)
+        .eq('current_task_id', taskId)
+        .select('id');
+
+      if (taskUpdateError || !taskUpdateResult || taskUpdateResult.length === 0) {
+        console.error('[overdue-skip] 更新小队当前任务失败,可能已被并发处理:', {
+          teamId, taskId, nextTaskId, error: taskUpdateError?.message,
+        });
+      }
       
       // 如果没有下一个任务，且当前是最后任务，则归档主题
       if (!nextTaskId && task.task_type === 'final') {
@@ -277,12 +296,19 @@ export async function POST(request: NextRequest) {
           }, { onConflict: 'team_id,theme_id,cycle' });
 
         if (completionError) {
+          // LE-P08: 归档失败必须终止,不能继续执行后续清零逻辑(原代码缺少 return,会继续执行并返回 success)
           console.error('[overdue-skip] 归档主题完成记录失败，终止清零以防数据不一致:', {
             teamId, themeId: task.theme_id, cycle, error: completionError.message,
           });
+          return NextResponse.json({
+            success: false,
+            error: '归档主题完成记录失败，已终止后续操作以防数据不一致',
+            detail: completionError.message,
+          }, { status: 500 });
         } else {
           // 步骤2：更新 team_theme_selections 为 completed
-          await client
+          // LE-P19: 带乐观锁 + .select('id') 验证,失败时记录告警(归档已成功,清零仍需执行)
+          const { data: selectionResult, error: selectionErr } = await client
             .from('team_theme_selections')
             .update({
               status: 'completed',
@@ -290,7 +316,13 @@ export async function POST(request: NextRequest) {
             })
             .eq('team_id', teamId)
             .eq('theme_id', task.theme_id)
-            .eq('cycle', cycle);
+            .eq('cycle', cycle)
+            .select('id');
+          if (selectionErr || !selectionResult || selectionResult.length === 0) {
+            console.error('[overdue-skip] 更新主题选择记录为 completed 失败:', {
+              teamId, themeId: task.theme_id, cycle, error: selectionErr?.message,
+            });
+          }
 
           // 步骤3：重置 teams 表当前主题/任务状态 + cycle+1
           // 积分跨周期累积，不清零；乐观锁 .eq('cycle', cycle) 防并发双归档

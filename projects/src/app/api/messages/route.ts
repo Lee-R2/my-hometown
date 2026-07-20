@@ -1,14 +1,14 @@
 import { requireAnyAuth, authError, safeError } from '@/lib/api-auth';
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import { supabaseErrorResponse, ApiErrors } from '@/lib/api-error';
 
 export async function GET(request: NextRequest) {
-  const auth = requireAnyAuth(request);
+  const auth = await requireAnyAuth(request);
   if (!auth.authenticated) return authError(auth);
 
   try {
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
 
     const { searchParams } = new URL(request.url);
     const teamId = searchParams.get('teamId');
@@ -17,10 +17,11 @@ export async function GET(request: NextRequest) {
 
     // 如果请求的是可发送的接收对象列表
     if (action === 'sendable-recipients' || action === 'sendable-teams') {
-      const userId = searchParams.get('userId');
-      const userRole = searchParams.get('userRole');
+      // LE-A13: 强制使用认证身份,防止客户端伪造 userRole 获取全量数据
+      const userId = auth.payload!.userId;
+      const userRole = auth.payload!.role;
       const schoolId = searchParams.get('schoolId');
-      
+
       if (!userId || !userRole) {
         return ApiErrors.validation('缺少用户信息');
       }
@@ -181,17 +182,25 @@ export async function GET(request: NextRequest) {
     }
 
     // 原有的获取消息列表逻辑
+    // LE-A13: 强制使用认证身份,防止横向越权读取他人消息
+    const authUserId = auth.payload!.userId;
+    const authRole = auth.payload!.role;
+    // 小队身份只能查自己小队的消息;管理类角色可代查指定小队
+    const effectiveTeamId = authRole === 'team' ? authUserId : teamId;
+    // receiverId 强制为认证身份(管理员查小队消息时不需要 receiverId)
+    const effectiveReceiverId = receiverId || (authRole !== 'team' && teamId ? undefined : authUserId);
+
     let query = client
       .from('messages')
       .select('*')
       .order('created_at', { ascending: false });
 
-    if (teamId) {
-      query = query.eq('team_id', teamId);
+    if (effectiveTeamId) {
+      query = query.eq('team_id', effectiveTeamId);
     }
 
-    if (receiverId) {
-      query = query.eq('receiver_id', receiverId);
+    if (effectiveReceiverId) {
+      query = query.eq('receiver_id', effectiveReceiverId);
     }
 
     const { data: messages, error } = await query;
@@ -245,12 +254,12 @@ export async function GET(request: NextRequest) {
 
 // 发送消息（支持批量发送、多媒体内容和按角色发送）
 export async function POST(request: NextRequest) {
-  const auth = requireAnyAuth(request);
+  const auth = await requireAnyAuth(request);
   if (!auth.authenticated) return authError(auth);
 
   try {
     const body = await request.json();
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
 
     const {
       targetIds,    // 目标ID数组

@@ -49,6 +49,11 @@ export function useSpeech(
           body: JSON.stringify({ text }),
         });
 
+        // 安全修复 LE-F04: 先检查 res.ok,避免服务端返回 HTML 错误页时 res.json() 抛 SyntaxError
+        if (!response.ok) {
+          throw new Error('语音合成服务异常');
+        }
+
         const data = await response.json();
 
         if (data.success && data.audioUri) {
@@ -108,6 +113,11 @@ export function useSpeech(
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ text }),
         });
+
+        // 安全修复 LE-F04: 先检查 res.ok,避免服务端返回 HTML 错误页时 res.json() 抛 SyntaxError
+        if (!response.ok) {
+          throw new Error('语音合成服务异常');
+        }
 
         const data = await response.json();
 

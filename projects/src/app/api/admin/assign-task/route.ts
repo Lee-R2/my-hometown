@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import { requireAdminOrVolunteer, authError, safeError } from '@/lib/api-auth';
 import { ApiErrors } from '@/lib/api-error';
 
@@ -9,7 +9,7 @@ import { ApiErrors } from '@/lib/api-error';
  * 为小队设置当前任务和截止时间
  */
 export async function POST(request: NextRequest) {
-  const auth = requireAdminOrVolunteer(request);
+  const auth = await requireAdminOrVolunteer(request);
   if (!auth.authenticated) return authError(auth);
   try {
     const body = await request.json();
@@ -23,7 +23,7 @@ export async function POST(request: NextRequest) {
       return ApiErrors.validation('请选择任务主题');
     }
 
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
 
     // 1. 获取该主题下第一阶段的所有任务（含 task_group_id 和难度）
     const { data: firstStageTasks, error: tasksError } = await client

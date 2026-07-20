@@ -1,133 +1,38 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireTeam, authError, safeError } from '@/lib/api-auth';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
-import { ApiErrors } from '@/lib/api-error';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
+import { ApiErrors, supabaseErrorResponse } from '@/lib/api-error';
 
-const supabase = getSupabaseClient();
-
-// 挂单详情（求购单含推荐商品）
-export async function GET(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const auth = requireTeam(request);
+/**
+ * 获取小队详细信息
+ * 安全修复：team 角色只能查自己的信息，忽略客户端传入的 team_id
+ */
+export async function GET(request: NextRequest) {
+  const auth = await requireTeam(request);
   if (!auth.authenticated) return authError(auth);
-  const teamId = auth.payload!.userId;
-
   try {
-    const { id } = await params;
-    const { data: listing, error } = await supabase
-      .from('cloud_market_listings')
-      .select(`*, team:team_id(id, name, icon)`)
-      .eq('id', id)
-      .single();
+    // 强制使用认证令牌中的 userId，防止横向越权
+    const teamId = auth.payload!.userId;
 
-    if (error || !listing) return ApiErrors.notFound('挂单不存在');
-
-    let recommendations: any[] = [];
-    if (listing.listing_type === 'buy' && listing.status === 'active') {
-      let recQuery = supabase
-        .from('cloud_market_listings')
-        .select(`*, team:team_id(id, name, icon)`)
-        .eq('listing_type', 'sell')
-        .eq('item_type', listing.item_type)
-        .eq('status', 'active')
-        .neq('team_id', teamId)
-        .order('price', { ascending: true, nullsFirst: false })
-        .limit(10);
-
-      if (listing.scope === 'theme') {
-        recQuery = recQuery.eq('scope', 'theme').eq('theme_id', listing.theme_id);
-      } else if (listing.scope === 'school') {
-        recQuery = recQuery.eq('scope', 'school').eq('school_id', listing.school_id);
-      }
-
-      const { data: recs } = await recQuery;
-      recommendations = recs || [];
+    if (!teamId) {
+      return ApiErrors.validation('认证令牌无效');
     }
 
-    return NextResponse.json({
-      success: true,
-      data: listing,
-      recommendations,
-    });
-  } catch (error: any) {
-    return safeError(error);
-  }
-}
+    const supabase = getSupabaseAdminClient();
 
-// 修改自己的挂单
-export async function PATCH(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const auth = requireTeam(request);
-  if (!auth.authenticated) return authError(auth);
-  const teamId = auth.payload!.userId;
-
-  try {
-    const { id } = await params;
-    const body = await request.json();
-    const { price, item_description, item_image_url, status } = body;
-
-    const { data: listing, error: getErr } = await supabase
-      .from('cloud_market_listings')
-      .select('id, team_id, status')
-      .eq('id', id)
-      .single();
-    if (getErr || !listing) return ApiErrors.notFound('挂单不存在');
-    if (listing.team_id !== teamId) return ApiErrors.forbidden('无权操作他人挂单');
-    if (listing.status !== 'active') return ApiErrors.validation('挂单已不可修改');
-
-    const updateData: any = { updated_at: new Date().toISOString() };
-    if (price !== undefined) updateData.price = price;
-    if (item_description !== undefined) updateData.item_description = item_description;
-    if (item_image_url !== undefined) updateData.item_image_url = item_image_url;
-    if (status !== undefined) updateData.status = status;
-
-    const { data: updated, error: updErr } = await supabase
-      .from('cloud_market_listings')
-      .update(updateData)
-      .eq('id', id)
-      .select()
+    const { data, error } = await supabase
+      .from('teams')
+      .select('id, code, name, points, heart_shards, heart_gems, created_by, has_completed_pretest, preferred_difficulty')
+      .eq('id', teamId)
       .single();
 
-    if (updErr) throw updErr;
+    if (error) {
+      // 安全修复：不直接返回 error.message，避免泄露数据库内部信息
+      // 生产环境返回通用消息，开发环境通过 supabaseErrorResponse 返回调试详情
+      return supabaseErrorResponse(error, '获取小队信息失败');
+    }
 
-    return NextResponse.json({ success: true, data: updated });
-  } catch (error: any) {
-    return safeError(error);
-  }
-}
-
-// 下架自己的挂单
-export async function DELETE(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const auth = requireTeam(request);
-  if (!auth.authenticated) return authError(auth);
-  const teamId = auth.payload!.userId;
-
-  try {
-    const { id } = await params;
-    const { data: listing, error: getErr } = await supabase
-      .from('cloud_market_listings')
-      .select('id, team_id, status')
-      .eq('id', id)
-      .single();
-    if (getErr || !listing) return ApiErrors.notFound('挂单不存在');
-    if (listing.team_id !== teamId) return ApiErrors.forbidden('无权操作他人挂单');
-    if (listing.status !== 'active') return ApiErrors.validation('挂单已不可下架');
-
-    const { error: updErr } = await supabase
-      .from('cloud_market_listings')
-      .update({ status: 'cancelled', updated_at: new Date().toISOString() })
-      .eq('id', id);
-
-    if (updErr) throw updErr;
-
-    return NextResponse.json({ success: true, message: '已下架' });
+    return NextResponse.json({ success: true, data });
   } catch (error: any) {
     return safeError(error);
   }

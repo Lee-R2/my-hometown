@@ -1,38 +1,25 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { verifyToken } from '@/lib/security';
-import { SESSION_COOKIE_NAME } from '@/lib/session';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { requireAnyAuth, authError } from '@/lib/api-auth';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import { ApiErrors } from '@/lib/api-error';
 
 /**
  * /api/auth/me
  * 通过 HttpOnly Cookie 中的 session token 获取当前用户信息
  * 前端启动时调用此接口，不再依赖 localStorage 存储敏感数据
+ * LE-A06 修复: 改用 requireAnyAuth(含 verifySession 数据库校验),并修正表名 parent_follows → parent_team_follows
  */
 export async function GET(request: NextRequest) {
+  // LE-A06: 使用 requireAnyAuth 统一鉴权(含 verifySession is_active 检查),
+  // 同时支持 Authorization header 和 Cookie 两种 token 提取方式
+  const auth = await requireAnyAuth(request);
+  if (!auth.authenticated) return authError(auth);
+
   try {
-    // 1. 从 Cookie 中提取 session token
-    const sessionCookie = request.cookies.get(SESSION_COOKIE_NAME);
-    if (!sessionCookie?.value) {
-      return NextResponse.json(
-        { authenticated: false, error: '未登录' },
-        { status: 401 }
-      );
-    }
+    const { userId, role, schoolId } = auth.payload!;
+    const client = getSupabaseAdminClient();
 
-    // 2. 验证 token
-    const payload = verifyToken(sessionCookie.value);
-    if (!payload) {
-      return NextResponse.json(
-        { authenticated: false, error: '会话已过期' },
-        { status: 401 }
-      );
-    }
-
-    const { userId, role, schoolId } = payload;
-    const client = getSupabaseClient();
-
-    // 3. 根据角色获取用户信息
+    // 根据角色获取用户信息
     if (role === 'team') {
       // 小队身份
       const { data: team, error } = await client
@@ -75,8 +62,9 @@ export async function GET(request: NextRequest) {
       }
 
       // 获取家长关注的列表
+      // LE-A06: 表名从 parent_follows 改为 parent_team_follows(与其他路由一致)
       const { data: follows } = await client
-        .from('parent_follows')
+        .from('parent_team_follows')
         .select('team_id, team:teams(id, name, code)')
         .eq('parent_id', userId);
 

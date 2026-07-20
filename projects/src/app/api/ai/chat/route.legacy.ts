@@ -2,7 +2,7 @@ import { requireAnyAuth, authError, safeError } from '@/lib/api-auth';
 import { ApiErrors } from '@/lib/api-error';
 import { NextRequest, NextResponse } from 'next/server';
 import { LLMClient, Config, HeaderUtils } from 'coze-coding-dev-sdk';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import { checkRateLimit, getClientIP } from '@/lib/rate-limit';
 import { AI_API_KEY, AI_BASE_URL, AI_MODEL_BASE_URL } from '@/lib/ai-config';
 import { getAppBaseUrl } from '@/lib/app-url';
@@ -25,7 +25,7 @@ async function saveToMemory(
   userName?: string
 ) {
   try {
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
     
     // 保存对话消息
     await client.from('agent_conversations').insert({
@@ -159,7 +159,7 @@ async function extractImportantInfo(
   sessionId?: string
 ) {
   try {
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
     
     // 提取用户姓名
     const namePatterns = [
@@ -356,7 +356,7 @@ async function getRelevantMemories(
   sessionId?: string
 ): Promise<string> {
   try {
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
     const memories: string[] = [];
 
     // 构建查询条件
@@ -409,7 +409,7 @@ async function getRelevantMemories(
     }
 
     // 银蛇博士专属：获取小队完整数据
-    if (agentUsername === 'yinhe_boshi' && teamId) {
+    if (agentUsername === 'yinshe_boshi' && teamId) {
       memories.push('\n【小队完整数据】');
       
       try {
@@ -596,7 +596,7 @@ async function getRelevantMemories(
         .from('agent_daily_syncs')
         .select('summary, feedback_count, details')
         .eq('sync_date', today)
-        .eq('sender', 'yinhe_boshi')
+        .eq('sender', 'yinshe_boshi')
         .eq('receiver', 'laxiang_zhushou')
         .single();
 
@@ -831,7 +831,7 @@ async function getOrCreateSession(
   sessionId?: string
 ): Promise<string> {
   try {
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
     
     // 如果传入了 sessionId，直接使用（前端已基于 teamId/userId 生成固定 ID）
     if (sessionId) {
@@ -909,7 +909,7 @@ async function getOrCreateSession(
 }
 
 export async function POST(request: NextRequest) {
-  const auth = requireAnyAuth(request);
+  const auth = await requireAnyAuth(request);
   if (!auth.authenticated) return authError(auth);
 
   // 频率限制：每分钟最多20次AI请求
@@ -2143,8 +2143,8 @@ JSON字段说明：
                     const memVal = contentMatch[1].trim();
                     const agentName = assistantType === 'yinhe' ? 'dr-silver-snake' : 'wax-elephant';
                     
-                    const { getSupabaseClient } = await import('@/storage/database/supabase-client');
-                    const supabase = getSupabaseClient();
+                    const { getSupabaseAdminClient } = await import('@/storage/database/supabase-client');
+                    const supabase = getSupabaseAdminClient();
                     await supabase.from('agent_memories').insert({
                       agent_username: agentName,
                       user_id: userId || '',
@@ -2161,8 +2161,8 @@ JSON字段说明：
                   const layerFilter = memContent.match(/L(\d)/);
                   const typeFilter = memContent.match(/类型:(\w+)/);
                   
-                  const { getSupabaseClient } = await import('@/storage/database/supabase-client');
-                  const supabase = getSupabaseClient();
+                  const { getSupabaseAdminClient } = await import('@/storage/database/supabase-client');
+                  const supabase = getSupabaseAdminClient();
                   let query = supabase.from('agent_memories')
                     .select('content, memory_type, layer, importance, created_at')
                     .eq('agent_username', agentName)
@@ -2252,7 +2252,7 @@ JSON字段说明：
             );
             
             // 如果是银蛇博士，自动提取反馈并发送给蜡象助手
-            if (agentInfo.username === 'yinhe_boshi') {
+            if (agentInfo.username === 'yinshe_boshi') {
               await extractAndForwardFeedback(fullResponse, {
                 teamId,
                 themeId: contextData?.context?.team?.current_theme_id,
@@ -2514,7 +2514,7 @@ async function extractAndForwardFeedback(
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              sender: 'yinhe_boshi',
+              sender: 'yinshe_boshi',
               receiver: 'laxiang_zhushou',
               messageType: 'task_feedback',
               content: message,

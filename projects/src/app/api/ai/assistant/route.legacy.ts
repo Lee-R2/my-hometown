@@ -2,7 +2,7 @@ import { requireAnyAuth, authError, safeError } from '@/lib/api-auth';
 import { ApiErrors } from '@/lib/api-error';
 import { NextRequest, NextResponse } from 'next/server';
 import { LLMClient, Config, HeaderUtils } from 'coze-coding-dev-sdk';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import { LIKE_POINTS } from '@/lib/constants';
 import { 
   getOrCreateSession, 
@@ -1847,7 +1847,7 @@ function buildDataContext(teamData: Record<string, any>, siblingData?: any): str
 }
 
 export async function POST(request: NextRequest) {
-  const auth = requireAnyAuth(request);
+  const auth = await requireAnyAuth(request);
   if (!auth.authenticated) return authError(auth);
 
   try {
@@ -1873,7 +1873,7 @@ export async function POST(request: NextRequest) {
       return ApiErrors.validation('请输入问题或上传图片');
     }
 
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
     
     // 获取小队完整数据
     const teamData = await getTeamData(client, teamId);

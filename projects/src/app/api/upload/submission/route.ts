@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { uploadFile, generateSignedUrl } from '@/lib/storage-utils';
 import { ApiErrors } from '@/lib/api-error';
 import { isDangerousExtension } from '@/lib/security';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 
 // 支持的文件类型
 const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/bmp'];
@@ -31,13 +32,13 @@ function getFileCategory(mimeType: string): 'image' | 'video' | 'text' | 'unknow
 
 // 任务产出文件上传API
 export async function POST(request: NextRequest) {
-  const auth = requireAnyAuth(request);
+  const auth = await requireAnyAuth(request);
   if (!auth.authenticated) return authError(auth);
 
   try {
     const formData = await request.formData();
     const file = formData.get('file') as File;
-    const teamId = formData.get('teamId') as string;
+    const formDataTeamId = formData.get('teamId') as string;
     const teamName = formData.get('teamName') as string;
     const themeName = formData.get('themeName') as string;
     const stage = formData.get('stage') as string;
@@ -45,6 +46,36 @@ export async function POST(request: NextRequest) {
 
     if (!file) {
       return ApiErrors.validation('未找到上传文件');
+    }
+
+    // LE-A10: teamId 必须与认证身份比对,防止跨小队上传
+    // team 身份: teamId 必须等于认证 userId;管理员/老师/志愿者: 可指定 teamId 但需校验存在性
+    const authUserId = auth.payload!.userId;
+    const authRole = auth.payload!.role;
+    let teamId: string | null = null;
+
+    if (authRole === 'team') {
+      // 小队身份:强制使用认证令牌中的 userId
+      teamId = authUserId;
+    } else if (['super_admin', 'admin', 'teacher', 'volunteer'].includes(authRole)) {
+      // 管理类角色:可代小队上传,但必须提供 teamId
+      if (!formDataTeamId) {
+        return ApiErrors.validation('缺少小队ID');
+      }
+      teamId = formDataTeamId;
+      // 校验 teamId 是否存在(防止伪造不存在的 ID)
+      const adminClient = getSupabaseAdminClient();
+      const { data: teamExists } = await adminClient
+        .from('teams')
+        .select('id')
+        .eq('id', teamId)
+        .eq('is_active', true)
+        .single();
+      if (!teamExists) {
+        return ApiErrors.validation('小队不存在或已禁用');
+      }
+    } else {
+      return ApiErrors.forbidden('无权上传文件');
     }
 
     // 安全修复（P3 输入校验）：扩展名黑名单校验，禁止可执行脚本/可含 XSS 的文件

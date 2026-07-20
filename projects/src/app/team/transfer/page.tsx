@@ -20,6 +20,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
+import { safeJSONParse } from '@/lib/utils';
 
 interface Team {
   id: string;
@@ -71,7 +72,7 @@ export default function TransferPage() {
     if (typeof window === 'undefined' || !team) return new Set();
     try {
       const stored = localStorage.getItem(`readTransferIds_${team.id}`);
-      return stored ? new Set(JSON.parse(stored)) : new Set();
+      return stored ? new Set(safeJSONParse(stored, [])) : new Set();
     } catch { return new Set(); }
   }, [team]);
 
@@ -125,7 +126,11 @@ export default function TransferPage() {
         return;
       }
 
-      const parsed = JSON.parse(teamData);
+      const parsed = safeJSONParse(teamData, null as any);
+      if (!parsed) {
+        router.push('/team/login');
+        return;
+      }
 
       // 获取当前小队的最新信息（包括heart_shards和heart_gems）
       const teamRes = await fetch(`/api/team/info?team_id=${parsed.id}`);

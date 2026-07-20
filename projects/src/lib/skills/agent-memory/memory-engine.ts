@@ -277,7 +277,7 @@ export async function maintainMemories(params: {
         entries.sort((a, b) => b.importance - a.importance);
         const toDelete = entries.slice(1).map(e => e.id).filter(Boolean) as string[];
         if (toDelete.length > 0) {
-          const supabase = (await import('@/storage/database/supabase-client')).getSupabaseClient();
+          const supabase = (await import('@/storage/database/supabase-client')).getSupabaseAdminClient();
           await supabase.from('agent_memories').delete().in('id', toDelete);
           merged += toDelete.length;
         }

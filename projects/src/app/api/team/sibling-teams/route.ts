@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireTeam, authError } from '@/lib/api-auth';
+import { requireTeam, authError, getAuthenticatedClient } from '@/lib/api-auth';
 import { supabaseErrorResponse, ApiErrors } from '@/lib/api-error';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
 
 /**
  * 获取同志愿者指导的其他小队信息
@@ -9,7 +8,7 @@ import { getSupabaseClient } from '@/storage/database/supabase-client';
  * 区分项目周期：已完成当前主题的小队进入新一轮
  */
 export async function GET(request: NextRequest) {
-  const auth = requireTeam(request);
+  const auth = await requireTeam(request);
   if (!auth.authenticated) return authError(auth);
   try {
     const { searchParams } = new URL(request.url);
@@ -21,7 +20,7 @@ export async function GET(request: NextRequest) {
       return ApiErrors.validation('认证令牌无效');
     }
 
-    const client = getSupabaseClient();
+    const client = getAuthenticatedClient(request, auth);
 
     // 获取当前小队信息（包含 cycle）
     const { data: currentTeam, error: currentTeamError } = await client

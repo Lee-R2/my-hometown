@@ -16,6 +16,7 @@ import {
   Camera,
   ChevronRight,
   Lightbulb,
+  Minimize2,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAssistantAdapt } from '@/hooks/use-assistant-adapt';
@@ -86,6 +87,11 @@ export default function AIAssistant({
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // LE-F07: 用 ref 跟踪最新 messages,避免 handleRecordingComplete 依赖 messages 导致频繁重建
+  const messagesRef = useRef<Message[]>(messages);
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
 
   // 语音播放 Hook（依赖 hasUserInteracted）
   const {
@@ -125,6 +131,12 @@ export default function AIAssistant({
           }),
         });
 
+        // 安全修复 LE-F04: 先检查 res.ok,避免服务端返回 HTML 错误页时 res.json() 抛 SyntaxError
+        if (!response.ok) {
+          toast.error('语音识别服务异常,请稍后重试');
+          return;
+        }
+
         const data = await response.json();
 
         if (data.success && data.text) {
@@ -143,7 +155,7 @@ export default function AIAssistant({
                 teamId,
                 message: voiceMessage,
                 images: [],
-                history: messages.slice(-16),
+                history: messagesRef.current.slice(-16),
                 sessionId, // 修复：补充 sessionId，保持语音与文本对话上下文一致
               }),
             });
@@ -203,7 +215,7 @@ export default function AIAssistant({
         setIsLoading(false);
       }
     },
-    [teamId, messages, autoSpeakEnabled, autoSpeak, playBase64Audio]
+    [teamId, autoSpeakEnabled, autoSpeak, playBase64Audio]
   );
 
   const { isRecording, startRecording, stopRecording } = useRecording(handleRecordingComplete);
@@ -551,8 +563,10 @@ export default function AIAssistant({
                     stopAll();
                     setIsOpen(false);
                   }}
+                  title="最小化"
                 >
-                  <X className="h-5 w-5" />
+                  {/* LE-M12: 关闭按钮改为最小化按钮,确保对话连续性 */}
+                  <Minimize2 className="h-5 w-5" />
                 </Button>
               </div>
             </CardHeader>

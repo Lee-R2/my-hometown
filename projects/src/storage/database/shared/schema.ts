@@ -567,42 +567,68 @@ export const parentTeamRelations = pgTable("parent_team_relations", {
 ]);
 
 // 智能体会话表
+// 安全修复 LE-M04: 字段与实际数据库列名对齐。
+// 之前 schema 使用 teamId/agentType/status/updatedAt,但实际代码(route.legacy.ts、memory.ts)
+// 使用 agent_username/user_id/team_id/session_id/is_active/last_activity_at。
 export const agentSessions = pgTable("agent_sessions", {
 	id: varchar({ length: 36 }).default(gen_random_uuid).primaryKey().notNull(),
-	teamId: varchar("team_id", { length: 36 }).notNull(),
-	agentType: varchar("agent_type", { length: 50 }).notNull(),
-	status: varchar({ length: 20 }).default('active'),
+	agentUsername: varchar("agent_username", { length: 50 }).notNull(),
+	userId: varchar("user_id", { length: 36 }),
+	teamId: varchar("team_id", { length: 36 }),
+	sessionId: varchar("session_id", { length: 100 }).notNull(),
+	isActive: boolean("is_active").default(true).notNull(),
+	lastActivityAt: timestamp("last_activity_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
-	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }),
 }, (table) => [
 	index("idx_agent_sessions_team_id").using("btree", table.teamId.asc().nullsLast().op("text_ops")),
+	index("idx_agent_sessions_user_id").using("btree", table.userId.asc().nullsLast().op("text_ops")),
+	index("idx_agent_sessions_session_id").using("btree", table.sessionId.asc().nullsLast().op("text_ops")),
 ]);
 
 // 智能体对话表
+// 安全修复 LE-M04: 字段与实际数据库列名对齐。
+// 之前 schema 使用 sessionId/role/content/messageType/mediaUrl,
+// 但实际代码使用 agent_username/user_id/user_name/session_id/role/content。
 export const agentConversations = pgTable("agent_conversations", {
 	id: varchar({ length: 36 }).default(gen_random_uuid).primaryKey().notNull(),
-	sessionId: varchar("session_id", { length: 36 }).notNull(),
+	agentUsername: varchar("agent_username", { length: 50 }).notNull(),
+	userId: varchar("user_id", { length: 36 }),
+	userName: varchar("user_name", { length: 100 }),
+	sessionId: varchar("session_id", { length: 100 }).notNull(),
 	role: varchar({ length: 20 }).notNull(), // user, assistant, system
 	content: text().notNull(),
-	messageType: varchar("message_type", { length: 20 }).default('text'),
-	mediaUrl: varchar("media_url", { length: 500 }),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table) => [
 	index("idx_agent_conversations_session_id").using("btree", table.sessionId.asc().nullsLast().op("text_ops")),
+	index("idx_agent_conversations_user_id").using("btree", table.userId.asc().nullsLast().op("text_ops")),
 ]);
 
 // 智能体记忆表
+// 安全修复 LE-M04: 字段与实际数据库列名完全对齐。
+// 之前 schema 使用 teamId/agentType/memoryType/importance/createdAt/updatedAt,
+// 但实际代码(agent-memory.ts addMemory、stream-handler.ts [记忆] 保存)使用:
+// agent_username/user_id/memory_type/content/context_key/context_value/layer/
+// importance/is_active/expires_at/last_accessed_at/access_count/created_at/updated_at。
 export const agentMemories = pgTable("agent_memories", {
 	id: varchar({ length: 36 }).default(gen_random_uuid).primaryKey().notNull(),
-	teamId: varchar("team_id", { length: 36 }).notNull(),
-	agentType: varchar("agent_type", { length: 50 }).notNull(),
+	agentUsername: varchar("agent_username", { length: 50 }).notNull(),
+	userId: varchar("user_id", { length: 36 }),
 	memoryType: varchar("memory_type", { length: 30 }),
 	content: text().notNull(),
+	contextKey: varchar("context_key", { length: 100 }),
+	contextValue: varchar("context_value", { length: 200 }),
+	layer: integer().default(2),
 	importance: integer().default(0),
+	isActive: boolean("is_active").default(true).notNull(),
+	expiresAt: timestamp("expires_at", { withTimezone: true, mode: 'string' }),
+	lastAccessedAt: timestamp("last_accessed_at", { withTimezone: true, mode: 'string' }),
+	accessCount: integer("access_count").default(0),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }),
 }, (table) => [
-	index("idx_agent_memories_team_id").using("btree", table.teamId.asc().nullsLast().op("text_ops")),
+	index("idx_agent_memories_team_id").using("btree", table.userId.asc().nullsLast().op("text_ops")),
+	index("idx_agent_memories_agent_username").using("btree", table.agentUsername.asc().nullsLast().op("text_ops")),
+	index("idx_agent_memories_is_active").using("btree", table.isActive.asc().nullsLast().op("text_ops")),
 ]);
 
 // 小队活动日志表

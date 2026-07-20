@@ -54,33 +54,40 @@ export function DataSyncProvider({
   const [changes, setChanges] = useState<string[]>([]);
   const subscribersRef = useRef<Map<string, Set<() => void>>>(new Map());
 
+  // 安全修复 LE-F01: 把 lastSync 放进 ref,避免 syncNow 依赖 lastSync state。
+  // 之前 markSynced() 调用 setLastSync(Date.now()) 会重建 syncNow,
+  // 进而触发 [enabled, interval, syncNow] 的 effect 重新执行 → 立即 syncNow() 一次 + 重建 interval,
+  // 形成"标记已读 → 触发同步 → 又有更新 → 再次标记"的乒乓效应。
+  // 改为 ref 后,syncNow 依赖列表不再包含 lastSync,effect 不会因 markSynced 而重建。
+  const lastSyncRef = useRef<number>(lastSync);
+
   const syncNow = useCallback(async () => {
     if (!enabled) return;
-    
+
     setIsSyncing(true);
     try {
       const params = new URLSearchParams();
       if (teamId) params.append('teamId', teamId);
       if (userId) params.append('userId', userId);
       if (userRole) params.append('userRole', userRole);
-      params.append('lastSync', lastSync.toString());
+      params.append('lastSync', lastSyncRef.current.toString());
 
       const res = await fetch(`/api/sync?${params.toString()}`);
-      
+
       // 检查 response.ok，避免 HTML 错误页导致 JSON 解析失败
       if (!res.ok) {
         return;
       }
-      
+
       const data = await res.json();
 
       if (data.success) {
         setStatus(data.status);
-        
+
         if (data.hasUpdates && data.changes.length > 0) {
           setHasUpdates(true);
           setChanges(data.changes);
-          
+
           // 通知订阅者
           data.changes.forEach((key: string) => {
             const callbacks = subscribersRef.current.get(key);
@@ -88,7 +95,7 @@ export function DataSyncProvider({
               callbacks.forEach(cb => cb());
             }
           });
-          
+
           // 同时通知 'all' 订阅者
           const allCallbacks = subscribersRef.current.get('all');
           if (allCallbacks) {
@@ -102,10 +109,13 @@ export function DataSyncProvider({
     } finally {
       setIsSyncing(false);
     }
-  }, [enabled, teamId, userId, userRole, lastSync]);
+  }, [enabled, teamId, userId, userRole]);
 
   const markSynced = useCallback(() => {
-    setLastSync(Date.now());
+    const now = Date.now();
+    // 同步更新 ref 和 state:ref 供 syncNow 读取最新值,state 供 UI 显示
+    lastSyncRef.current = now;
+    setLastSync(now);
     setHasUpdates(false);
     setChanges([]);
   }, []);

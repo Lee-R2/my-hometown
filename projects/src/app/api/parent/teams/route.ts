@@ -1,15 +1,15 @@
-import { requireParent, authError, safeError } from '@/lib/api-auth';
+import { requireParent, authError, safeError, getAuthenticatedClient } from '@/lib/api-auth';
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import { calculateCurrentGrade } from '@/lib/calculate-grade';
 import { supabaseErrorResponse, ApiErrors } from '@/lib/api-error';
 
-const supabase = getSupabaseClient();
-
 // 获取关注的小队列表
 export async function GET(request: NextRequest) {
-  const auth = requireParent(request);
+  const auth = await requireParent(request);
   if (!auth.authenticated) return authError(auth);
+
+  const supabase = getAuthenticatedClient(request, auth);
 
   try {
     const { searchParams } = new URL(request.url);
@@ -93,14 +93,23 @@ export async function GET(request: NextRequest) {
 
 // 关注小队 - 提交审核申请
 export async function POST(request: NextRequest) {
+  // 安全:必须家长身份认证,防止未授权批量提交关注申请
+  const auth = await requireParent(request);
+  if (!auth.authenticated) return authError(auth);
+
+  const supabase = getAuthenticatedClient(request, auth);
+
   try {
     const body = await request.json();
-    const { parentId, teamId, childName, childGrade, relation, relationType, guardianReason, schoolId, schoolName } = body;
+    const { teamId, childName, childGrade, relation, relationType, guardianReason, schoolId, schoolName } = body;
 
-    if (!parentId || !teamId || !childName) {
+    // 安全:强制使用认证令牌中的 userId 作为 parentId,防止冒充其他家长
+    const parentId = auth.payload!.userId;
+
+    if (!teamId || !childName) {
       return ApiErrors.validation('缺少必要参数');
     }
-    
+
     // 如果是其他关系类型，必须提供监护人说明
     if (relationType === '其他' && !guardianReason) {
       return ApiErrors.validation('请说明为何由你作为此学生监护人');
@@ -230,11 +239,20 @@ export async function POST(request: NextRequest) {
 
 // PUT: 修改并重新提交关注申请
 export async function PUT(request: NextRequest) {
+  // 安全:必须家长身份认证,防止未授权篡改他人关注申请
+  const auth = await requireParent(request);
+  if (!auth.authenticated) return authError(auth);
+
+  const supabase = getAuthenticatedClient(request, auth);
+
   try {
     const body = await request.json();
-    const { parentId, followId, childName, childGrade, relation, guardianReason } = body;
+    const { followId, childName, childGrade, relation, guardianReason } = body;
 
-    if (!parentId || !followId || !childName) {
+    // 安全:强制使用认证令牌中的 userId 作为 parentId,防止冒充其他家长
+    const parentId = auth.payload!.userId;
+
+    if (!followId || !childName) {
       return ApiErrors.validation('缺少必要参数');
     }
 
@@ -243,7 +261,7 @@ export async function PUT(request: NextRequest) {
       return ApiErrors.validation('请说明为何由你作为此学生监护人');
     }
 
-    // 获取关注记录
+    // 获取关注记录(同时校验归属:parent_id 必须等于认证身份)
     const { data: existing, error: fetchError } = await supabase
       .from('parent_team_follows')
       .select('*')
@@ -327,6 +345,8 @@ export async function PUT(request: NextRequest) {
 async function sendReviewNotification(schoolId: string, teamId: string, teamName: string, parent: any, childName: string, childGrade: string | null, relation: string | null, guardianReason: string | null, followId: string) {
   if (!schoolId) return;
 
+  const supabase = getSupabaseAdminClient();
+
   // 查找该学校下的所有老师
   const { data: teachers } = await supabase
     .from('users')
@@ -364,36 +384,41 @@ async function sendReviewNotification(schoolId: string, teamId: string, teamName
 
 // 取消关注
 export async function DELETE(request: NextRequest) {
+  // 安全:必须家长身份认证,防止未授权取消他人关注关系
+  const auth = await requireParent(request);
+  if (!auth.authenticated) return authError(auth);
+
+  const supabase = getAuthenticatedClient(request, auth);
+
   try {
     const { searchParams } = new URL(request.url);
     const followId = searchParams.get('followId');
-    const parentId = searchParams.get('parentId');
 
-    if (!followId && !parentId) {
-      return ApiErrors.validation('缺少参数');
-    }
+    // 安全:强制使用认证令牌中的 userId 作为 parentId,忽略客户端传入的 parentId
+    const parentId = auth.payload!.userId;
 
-    if (followId) {
-      // 软删除：标记为不活跃
+    if (!followId) {
+      // 取消该家长的所有关注(仅限本人)
       const { error } = await supabase
         .from('parent_team_follows')
         .update({
           is_active: false,
           unfollowed_at: new Date().toISOString()
         })
-        .eq('id', followId);
+        .eq('parent_id', parentId);
 
       if (error) {
         return supabaseErrorResponse(error, '取消关注失败');
       }
-    } else if (parentId) {
-      // 取消所有关注
+    } else {
+      // 软删除指定关注记录(同时校验 parent_id 归属,防止取消他人的关注)
       const { error } = await supabase
         .from('parent_team_follows')
         .update({
           is_active: false,
           unfollowed_at: new Date().toISOString()
         })
+        .eq('id', followId)
         .eq('parent_id', parentId);
 
       if (error) {
@@ -414,8 +439,10 @@ export async function DELETE(request: NextRequest) {
 
 // 切换小队
 export async function PATCH(request: NextRequest) {
-  const auth = requireParent(request);
+  const auth = await requireParent(request);
   if (!auth.authenticated) return authError(auth);
+
+  const supabase = getAuthenticatedClient(request, auth);
 
   try {
     const body = await request.json();

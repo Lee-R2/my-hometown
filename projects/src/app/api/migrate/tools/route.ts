@@ -1,6 +1,6 @@
 import { requireAdmin, authError, safeError } from '@/lib/api-auth';
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import { ApiErrors } from '@/lib/api-error';
 
 /**
@@ -8,11 +8,15 @@ import { ApiErrors } from '@/lib/api-error';
  * 仅在开发环境或管理员权限下可调用
  */
 export async function POST(request: NextRequest) {
-  const auth = requireAdmin(request);
+  // SEC-006: 迁移接口不应在生产环境暴露,即使有 requireAdmin 保护
+  if (process.env.NODE_ENV === 'production') {
+    return NextResponse.json({ error: 'Not Found' }, { status: 404 });
+  }
+  const auth = await requireAdmin(request);
   if (!auth.authenticated) return authError(auth);
 
   try {
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
 
     // 创建 school_tools 表
     const createSchoolToolsSQL = `

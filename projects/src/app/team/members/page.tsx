@@ -11,6 +11,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { ArrowLeft, Users, Plus, Edit2, X, Check, Trash2, Save, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useScrollPosition } from '@/hooks/use-scroll-position';
+import { safeGetJSON, safeJSONParse } from '@/lib/utils';
 
 interface Member {
   id: string;
@@ -76,7 +77,7 @@ export default function TeamInfoPage() {
       return;
     }
     
-    const teamObj = JSON.parse(teamData);
+    const teamObj = safeJSONParse(teamData, {} as any);
     setTeam(teamObj);
     setTempName(teamObj.name || '');
     setTempSlogan(teamObj.slogan || '');
@@ -107,7 +108,7 @@ export default function TeamInfoPage() {
       if (data.members) {
         setMembers(data.members);
         // 同步到 localStorage
-        const storedTeam = JSON.parse(localStorage.getItem('team') || '{}');
+        const storedTeam = safeGetJSON('team', {} as any);
         storedTeam.members = data.members;
         localStorage.setItem('team', JSON.stringify(storedTeam));
       }
@@ -145,7 +146,7 @@ export default function TeamInfoPage() {
 
       const data = await res.json();
       if (data.success) {
-        const storedTeam = JSON.parse(localStorage.getItem('team') || '{}');
+        const storedTeam = safeGetJSON('team', {} as any);
         const updatedTeam = { 
           ...storedTeam,
           ...(data.team || {}),
@@ -190,7 +191,7 @@ export default function TeamInfoPage() {
 
       const data = await res.json();
       if (data.success) {
-        const storedTeam = JSON.parse(localStorage.getItem('team') || '{}');
+        const storedTeam = safeGetJSON('team', {} as any);
         const updatedTeam = { 
           ...storedTeam,
           ...(data.team || {}),
@@ -239,7 +240,7 @@ export default function TeamInfoPage() {
         const updatedMembers = [...members, newMemberData];
         setMembers(updatedMembers);
         // 更新 localStorage
-        const storedTeam = JSON.parse(localStorage.getItem('team') || '{}');
+        const storedTeam = safeGetJSON('team', {} as any);
         storedTeam.members = updatedMembers;
         localStorage.setItem('team', JSON.stringify(storedTeam));
         toast.success('成员添加成功');
@@ -272,7 +273,7 @@ export default function TeamInfoPage() {
       if (data.success) {
         const updatedMembers = members.map(m => m.id === memberId ? { ...m, ...editMemberData } : m);
         setMembers(updatedMembers);
-        const storedTeam = JSON.parse(localStorage.getItem('team') || '{}');
+        const storedTeam = safeGetJSON('team', {} as any);
         storedTeam.members = updatedMembers;
         localStorage.setItem('team', JSON.stringify(storedTeam));
         setEditingMemberId(null);
@@ -296,7 +297,7 @@ export default function TeamInfoPage() {
       if (data.success) {
         const updatedMembers = members.filter(m => m.id !== memberId);
         setMembers(updatedMembers);
-        const storedTeam = JSON.parse(localStorage.getItem('team') || '{}');
+        const storedTeam = safeGetJSON('team', {} as any);
         storedTeam.members = updatedMembers;
         localStorage.setItem('team', JSON.stringify(storedTeam));
         toast.success('成员已删除');

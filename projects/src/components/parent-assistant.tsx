@@ -4,7 +4,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { X, Send, Loader2, Users, BookOpen, MessageCircle, ChevronRight, Lightbulb, GraduationCap, Mic, MicOff, Volume2, VolumeX, Square } from 'lucide-react';
+import { X, Send, Loader2, Users, BookOpen, MessageCircle, ChevronRight, Lightbulb, GraduationCap, Mic, MicOff, Volume2, VolumeX, Square, Minimize2 } from 'lucide-react';
 import { toast } from 'sonner';
 
 interface Message {
@@ -96,13 +96,15 @@ export default function ParentAssistant({ parentId, parentName }: ParentAssistan
 
   useEffect(() => {
     if (parentId && !sessionId) {
-      const storedSessionId = localStorage.getItem(`laxiang_session_parent_${parentId}`);
+      // LE-M08: 使用 sessionStorage 替代 localStorage,确保退出重进算新对话
+      const storedSessionId = sessionStorage.getItem(`laxiang_session_parent_${parentId}`);
       if (storedSessionId) {
         setSessionId(storedSessionId);
       } else {
-        const newSessionId = `laxiang_parent_${parentId}`;
+        // LE-M09: sessionId 加时间戳,防止上下文无限累积
+        const newSessionId = `laxiang_parent_${parentId}_${Date.now()}`;
         setSessionId(newSessionId);
-        localStorage.setItem(`laxiang_session_parent_${parentId}`, newSessionId);
+        sessionStorage.setItem(`laxiang_session_parent_${parentId}`, newSessionId);
       }
     }
   }, [parentId, sessionId]);
@@ -124,17 +126,23 @@ export default function ParentAssistant({ parentId, parentName }: ParentAssistan
   }, [isOpen]);
 
   // 清理音频资源
+  // 安全修复 LE-F02: 之前 cleanup 依赖 isRecording,当 isRecording 从 false→true 变化时,
+  // React 会先执行旧 effect 的 cleanup(此时 isRecording 还是旧值 false,不会 stop),
+  // 但当 isRecording 从 true→false 变化时,旧 effect 的 cleanup 会在 isRecording=true 时运行,
+  // 立即停止用户正在进行的录音。改为仅在组件卸载时清理,并直接检查 mediaRecorderRef.current.state。
   useEffect(() => {
     return () => {
       if (audioRef.current) {
         audioRef.current.pause();
         audioRef.current = null;
       }
-      if (mediaRecorderRef.current && isRecording) {
-        mediaRecorderRef.current.stop();
+      // 直接检查 MediaRecorder 实例的运行状态,而非依赖 React state
+      const recorder = mediaRecorderRef.current;
+      if (recorder && recorder.state !== 'inactive') {
+        recorder.stop();
       }
     };
-  }, [isRecording]);
+  }, []);
 
   // 文本转语音
   const speakText = async (text: string) => {
@@ -153,7 +161,21 @@ export default function ParentAssistant({ parentId, parentName }: ParentAssistan
         }),
       });
 
+      // 安全修复 LE-F04: 先检查 res.ok,避免服务端返回 HTML 错误页时 res.json() 抛 SyntaxError
+      if (!response.ok) {
+        console.error('[语音] TTS服务异常:', response.status);
+        return;
+      }
+
       const data = await response.json();
+      // 临时调试：打印完整响应，便于看到后端返回的错误详情
+      if (!data.success) {
+        console.error('[语音] TTS失败详情:', {
+          status: response.status,
+          statusText: response.statusText,
+          body: data,
+        });
+      }
 
       if (data.success && data.audioUri) {
         if (audioRef.current) {
@@ -618,7 +640,7 @@ export default function ParentAssistant({ parentId, parentName }: ParentAssistan
                     <VolumeX className="h-5 w-5" />
                   )}
                 </Button>
-                {/* 关闭按钮 */}
+                {/* LE-M11: 关闭按钮改为最小化按钮,确保对话连续性 */}
                 <Button
                   variant="ghost"
                   size="sm"
@@ -627,8 +649,9 @@ export default function ParentAssistant({ parentId, parentName }: ParentAssistan
                     stopSpeaking();
                     setIsOpen(false);
                   }}
+                  title="最小化"
                 >
-                  <X className="h-5 w-5" />
+                  <Minimize2 className="h-5 w-5" />
                 </Button>
               </div>
             </CardHeader>

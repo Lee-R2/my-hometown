@@ -1,14 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import { requireAdmin, authError, safeError } from '@/lib/api-auth';
 import { ApiErrors } from '@/lib/api-error';
 import { maskPhone } from '@/lib/security';
 
-const supabase = getSupabaseClient();
+const supabase = getSupabaseAdminClient();
 
 // 获取待审核家长列表
 export async function GET(request: NextRequest) {
-  const auth = requireAdmin(request);
+  const auth = await requireAdmin(request);
   if (!auth.authenticated) return authError(auth);
   try {
     const { searchParams } = new URL(request.url);
@@ -60,7 +60,7 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const auth = requireAdmin(request);
+  const auth = await requireAdmin(request);
   if (!auth.authenticated) return authError(auth);
   try {
     const body = await request.json();

@@ -1,13 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireTeam, authError, safeError } from '@/lib/api-auth';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { requireTeam, authError, safeError, getAuthenticatedClient } from '@/lib/api-auth';
 import { ApiErrors } from '@/lib/api-error';
-
-const supabase = getSupabaseClient();
 
 // 获取当前小队的借用记录
 export async function GET(request: NextRequest) {
-  const auth = requireTeam(request);
+  const auth = await requireTeam(request);
   if (!auth.authenticated) return authError(auth);
   const searchParams = request.nextUrl.searchParams;
   const teamId = auth.payload!.userId;
@@ -19,6 +16,7 @@ export async function GET(request: NextRequest) {
   }
 
   try {
+    const supabase = getAuthenticatedClient(request, auth);
     let query = supabase
       .from('point_borrows')
       .select(`
@@ -114,7 +112,7 @@ export async function GET(request: NextRequest) {
     });
 
     // 异步发送逾期提醒（不阻塞响应）
-    sendOverdueNotifications(teamId, processedData).catch(() => {});
+    sendOverdueNotifications(supabase, teamId, processedData).catch(() => {});
 
     return NextResponse.json({ success: true, data: processedData });
   } catch (error: any) {
@@ -124,6 +122,7 @@ export async function GET(request: NextRequest) {
 
 // 检查并发送逾期提醒通知
 async function sendOverdueNotifications(
+  supabase: any,
   teamId: string,
   records: Array<{
     id: string;

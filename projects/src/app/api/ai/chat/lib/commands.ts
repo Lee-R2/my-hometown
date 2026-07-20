@@ -111,7 +111,7 @@ export async function extractAndForwardFeedback(
 
     // 内部 fetch 默认 headers：优先使用透传的 authHeaders
     const internalHeaders = authHeaders || { 'Content-Type': 'application/json' };
-    // 添加内部服务标识，允许以 yinhe_boshi 身份发送反馈（agent-communication POST 会校验此 header）
+    // 添加内部服务标识，允许以 yinshe_boshi 身份发送反馈（agent-communication POST 会校验此 header）
     internalHeaders['X-Internal-Service'] = 'chat-stream';
 
     // 发送到跨智能体通信 API
@@ -128,7 +128,7 @@ export async function extractAndForwardFeedback(
             method: 'POST',
             headers: internalHeaders,
             body: JSON.stringify({
-              sender: 'yinhe_boshi',
+              sender: 'yinshe_boshi',
               receiver: 'laxiang_zhushou',
               messageType: 'task_feedback',
               content: message,

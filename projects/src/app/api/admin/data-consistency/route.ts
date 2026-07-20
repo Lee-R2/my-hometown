@@ -1,9 +1,9 @@
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import { requireAdmin, authError, safeError } from '@/lib/api-auth';
 import { NextRequest } from 'next/server';
 
 // 获取任务组信息（工具/技能不再强制一致性，仅供查看）
-async function getTaskGroupInfo(supabase: ReturnType<typeof getSupabaseClient>) {
+async function getTaskGroupInfo(supabase: ReturnType<typeof getSupabaseAdminClient>) {
   const groups: Array<{
     taskGroupId: string;
     groupName: string;
@@ -71,10 +71,10 @@ async function getTaskGroupInfo(supabase: ReturnType<typeof getSupabaseClient>) 
 
 // GET：查看任务组信息（不再检查一致性）
 export async function GET(request: NextRequest) {
-  const auth = requireAdmin(request);
+  const auth = await requireAdmin(request);
   if (!auth.authenticated) return authError(auth);
   try {
-    const supabase = getSupabaseClient();
+    const supabase = getSupabaseAdminClient();
     const groups = await getTaskGroupInfo(supabase);
 
     return Response.json({
@@ -90,7 +90,7 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const auth = requireAdmin(request);
+  const auth = await requireAdmin(request);
   if (!auth.authenticated) return authError(auth);
   try {
     return Response.json({

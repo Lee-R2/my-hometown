@@ -1,13 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireTeam, authError } from '@/lib/api-auth';
+import { requireTeam, authError, getAuthenticatedClient } from '@/lib/api-auth';
 import { supabaseErrorResponse, ApiErrors } from '@/lib/api-error';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
 
 /**
  * 获取小队已下发的支线任务列表
  */
 export async function GET(request: NextRequest) {
-  const auth = requireTeam(request);
+  const auth = await requireTeam(request);
   if (!auth.authenticated) return authError(auth);
   try {
     // 强制使用认证令牌中的 userId，防止横向越权
@@ -17,7 +16,7 @@ export async function GET(request: NextRequest) {
       return ApiErrors.validation('认证令牌无效');
     }
 
-    const client = getSupabaseClient();
+    const client = getAuthenticatedClient(request, auth);
 
     // 获取小队已下发的支线任务
     const { data: sideTasks, error } = await client

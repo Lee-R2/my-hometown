@@ -10,7 +10,7 @@
  * 适用于：银蛇博士、蜡象助手
  */
 
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 
 // 允许使用蒸馏的智能体（必须与数据库 agent_memories.agent_username 一致）
 const DISTILLABLE_AGENTS = ['yinshe_boshi', 'laxiang_zhushou'];
@@ -86,7 +86,7 @@ export async function distillAgentMemories(
   };
 
   try {
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
 
     // 1. 获取所有活跃记忆
     const { data: memories, error } = await client
@@ -286,7 +286,7 @@ export async function getDistillationStatus(): Promise<Record<string, {
   oldestMemory: string | null;
   newestMemory: string | null;
 }>> {
-  const client = getSupabaseClient();
+  const client = getSupabaseAdminClient();
   const status: Record<string, any> = {};
 
   for (const agent of DISTILLABLE_AGENTS) {

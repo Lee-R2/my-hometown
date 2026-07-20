@@ -164,18 +164,35 @@ export function createStreamResponse(ctx: StreamHandlerContext): Response {
                   const memType = typeMatch[1];
                   const memVal = contentMatch[1].trim();
                   const agentName = assistantType === 'yinhe' ? 'yinshe_boshi' : 'laxiang_zhushou';
+                  const now = new Date().toISOString();
 
-                  const { getSupabaseClient } = await import('@/storage/database/supabase-client');
-                  const supabase = getSupabaseClient();
+                  // 安全修复 LE-M03: 补全 insert 字段,与 agent-memory.ts 的 addMemory 保持一致。
+                  // 之前缺失 context_key/context_value/is_active/expires_at/last_accessed_at/access_count,
+                  // 且用 status: 'active' 而非 is_active: true,导致 getMemories 查询(.eq('is_active', true))永远查不到这些记忆。
+                  // L1(layer=0)短期记忆 24h 过期,L2/L3 长期记忆不过期(与系统提示词声明一致)。
+                  const isL1ShortTerm = layer <= 1;
+                  const expiresInHours = isL1ShortTerm ? 24 : null;
+                  const expiresAt = expiresInHours
+                    ? new Date(Date.now() + expiresInHours * 60 * 60 * 1000).toISOString()
+                    : null;
+
+                  const { getSupabaseAdminClient } = await import('@/storage/database/supabase-client');
+                  const supabase = getSupabaseAdminClient();
                   await supabase.from('agent_memories').insert({
                     agent_username: agentName,
                     user_id: userId || '',
                     memory_type: memType,
                     content: memVal,
+                    context_key: userId || null,
+                    context_value: userId || null,
                     layer: Math.min(4, Math.max(0, layer)),
                     importance: layer >= 3 ? 8 : layer >= 2 ? 5 : 3,
-                    status: 'active',
-                    created_at: new Date().toISOString()
+                    is_active: true,
+                    expires_at: expiresAt,
+                    last_accessed_at: now,
+                    access_count: 0,
+                    created_at: now,
+                    updated_at: now
                   });
                   controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: 'memory_saved', layer, memoryType: memType })}\n\n`));
                 }
@@ -184,12 +201,13 @@ export function createStreamResponse(ctx: StreamHandlerContext): Response {
                 const layerFilter = memContent.match(/L(\d)/);
                 const typeFilter = memContent.match(/类型:(\w+)/);
 
-                const { getSupabaseClient } = await import('@/storage/database/supabase-client');
-                const supabase = getSupabaseClient();
+                const { getSupabaseAdminClient } = await import('@/storage/database/supabase-client');
+                const supabase = getSupabaseAdminClient();
                 let query = supabase.from('agent_memories')
                   .select('content, memory_type, layer, importance, created_at')
                   .eq('agent_username', agentName)
                   .eq('user_id', userId || '')
+                  .eq('is_active', true)
                   .order('importance', { ascending: false })
                   .limit(10);
 
@@ -279,7 +297,7 @@ export function createStreamResponse(ctx: StreamHandlerContext): Response {
             );
 
             // 如果是银蛇博士，自动提取反馈并发送给蜡象助手
-            if (agentInfo.username === 'yinhe_boshi') {
+            if (agentInfo.username === 'yinshe_boshi') {
               await extractAndForwardFeedback(fullResponse, {
                 teamId,
                 themeId: contextData?.context?.team?.current_theme_id,

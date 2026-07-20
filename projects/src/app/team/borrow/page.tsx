@@ -13,6 +13,7 @@ import { ArrowLeft, ArrowRight, Clock, Coins, AlertTriangle, CheckCircle2, XCirc
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { useResponsive } from '@/hooks/use-responsive';
 import { toast } from 'sonner';
+import { safeJSONParse } from '@/lib/utils';
 
 interface Team {
   id: string;
@@ -99,7 +100,7 @@ export default function BorrowPage() {
     if (typeof window === 'undefined' || !team) return new Set();
     try {
       const stored = localStorage.getItem(`readBorrowHistoryIds_${team.id}`);
-      return stored ? new Set(JSON.parse(stored)) : new Set();
+      return stored ? new Set(safeJSONParse(stored, [])) : new Set();
     } catch { return new Set(); }
   }, [team]);
 
@@ -162,7 +163,11 @@ export default function BorrowPage() {
         return;
       }
 
-      const parsed = JSON.parse(teamData);
+      const parsed = safeJSONParse(teamData, null as any);
+      if (!parsed) {
+        router.push('/team/login');
+        return;
+      }
 
       // 从数据库获取最新积分，避免 localStorage 数据过时
       try {
@@ -375,7 +380,7 @@ export default function BorrowPage() {
         try {
           const stored = localStorage.getItem('team');
           if (stored) {
-            const parsed = JSON.parse(stored);
+            const parsed = safeJSONParse(stored, {} as Record<string, any>);
             parsed.points = newPoints;
             localStorage.setItem('team', JSON.stringify(parsed));
           }

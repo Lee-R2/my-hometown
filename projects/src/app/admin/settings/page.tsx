@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
+import { safeGetJSON } from '@/lib/utils';
 import { useRouter } from 'next/navigation';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -58,11 +59,10 @@ export default function AdminSettingsPage() {
   }, []);
 
   useEffect(() => {
-    const userData = localStorage.getItem('user');
-    if (userData) {
-      const user = JSON.parse(userData);
+    const user = safeGetJSON<{ id: string; role: string } | null>('user', null);
+    if (user) {
       setCurrentUser(user);
-      
+
       // 只有管理员（super_admin 或 admin）可以访问权限管理
       if (user.role !== 'admin' && user.role !== 'super_admin') {
         toast.error('您没有权限访问此页面');

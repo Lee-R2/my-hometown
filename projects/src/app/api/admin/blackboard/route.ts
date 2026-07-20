@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import { requireAnyAuth, requireAdmin, authError, safeError } from '@/lib/api-auth';
 import { ApiErrors } from '@/lib/api-error';
 
 export async function GET(request: NextRequest) {
-  const auth = requireAnyAuth(request);
+  const auth = await requireAnyAuth(request);
   if (!auth.authenticated) return authError(auth);
   try {
     const searchParams = request.nextUrl.searchParams;
@@ -17,7 +17,7 @@ export async function GET(request: NextRequest) {
     const userId = auth.payload!.userId;
     const userRole = auth.payload!.role;
 
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
 
     if (themesOnly) {
       const { data: themes, error: themeError } = await client
@@ -222,7 +222,7 @@ export async function GET(request: NextRequest) {
 }
 
 export async function DELETE(request: NextRequest) {
-  const auth = requireAdmin(request);
+  const auth = await requireAdmin(request);
   if (!auth.authenticated) return authError(auth);
   try {
     const body = await request.json();
@@ -232,7 +232,7 @@ export async function DELETE(request: NextRequest) {
       return ApiErrors.validation('缺少帖子ID');
     }
 
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
 
     const { data: post } = await client
       .from('blackboard_posts')

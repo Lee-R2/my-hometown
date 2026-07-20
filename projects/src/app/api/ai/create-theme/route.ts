@@ -1,6 +1,6 @@
 import { requireAdmin, authError, safeError } from '@/lib/api-auth';
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import { ApiErrors } from '@/lib/api-error';
 import { checkAiRateLimit } from '@/lib/rate-limit';
 
@@ -12,7 +12,7 @@ import { checkAiRateLimit } from '@/lib/rate-limit';
  * 可选字段：icon, is_exclusive, school_id, created_by
  */
 export async function POST(request: NextRequest) {
-  const auth = requireAdmin(request);
+  const auth = await requireAdmin(request);
   if (!auth.authenticated) return authError(auth);
 
   const rateLimit = await checkAiRateLimit(request, auth.payload?.userId, 'ai_create_theme');
@@ -59,7 +59,7 @@ export async function POST(request: NextRequest) {
     }
 
     // 校验主题名称唯一
-    const supabase = getSupabaseClient();
+    const supabase = getSupabaseAdminClient();
     const { data: existing, error: checkError } = await supabase
       .from('task_themes')
       .select('id, name')
@@ -138,11 +138,11 @@ export async function POST(request: NextRequest) {
  * 查询现有主题列表（供蜡象助手参考）
  */
 export async function GET(request: NextRequest) {
-  const auth = requireAdmin(request);
+  const auth = await requireAdmin(request);
   if (!auth.authenticated) return authError(auth);
 
   try {
-    const supabase = getSupabaseClient();
+    const supabase = getSupabaseAdminClient();
     const { data: themes, error } = await supabase
       .from('task_themes')
       .select('id, name, description, icon, is_exclusive, school_id, order_index, created_at')

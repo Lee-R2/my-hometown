@@ -2,7 +2,7 @@ import { requireAnyAuth, authError, safeError } from '@/lib/api-auth';
 import { NextRequest, NextResponse } from 'next/server';
 import { LLMClient, Config, HeaderUtils } from 'coze-coding-dev-sdk';
 import { generateSignedUrl } from '@/lib/storage-utils';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import { ApiErrors } from '@/lib/api-error';
 import { AI_API_KEY, AI_BASE_URL, AI_MODEL_BASE_URL } from '@/lib/ai-config';
 import { checkAiRateLimit } from '@/lib/rate-limit';
@@ -178,7 +178,7 @@ async function getAccessibleUrl(parsed: any): Promise<string | null> {
  * 多模态：图片通过 image_url 传给LLM，视频通过 video_url 传给LLM
  */
 export async function POST(request: NextRequest) {
-  const auth = requireAnyAuth(request);
+  const auth = await requireAnyAuth(request);
   if (!auth.authenticated) return authError(auth);
 
   const rateLimit = await checkAiRateLimit(request, auth.payload?.userId, 'ai_review');
@@ -197,7 +197,7 @@ export async function POST(request: NextRequest) {
       return ApiErrors.validation('缺少必要参数');
     }
 
-    const client = getSupabaseClient();
+    const client = getSupabaseAdminClient();
 
     // 1. 获取小队信息（含当前周期）
     const { data: team, error: teamError } = await client

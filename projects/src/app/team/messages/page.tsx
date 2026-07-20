@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useScrollPosition } from '@/hooks/use-scroll-position';
+import { safeJSONParse } from '@/lib/utils';
 
 interface Notification {
   id: string;
@@ -97,12 +98,12 @@ export default function MessagesPage() {
       return;
     }
     
-    const teamData = JSON.parse(teamDataStr);
+    const teamData = safeJSONParse(teamDataStr, null as any);
     setTeam(teamData);
-    
+
     // 获取志愿者信息（从 'user' 键获取，这是志愿者后台登录存储的位置）
     if (userDataStr) {
-      const userData = JSON.parse(userDataStr);
+      const userData = safeJSONParse(userDataStr, null as any);
       // 只有志愿者角色才获取管理员消息
       if (userData.role === 'volunteer') {
         setVolunteer({

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -38,6 +38,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { useScrollPosition } from "@/hooks/use-scroll-position";
+import { safeGetJSON, safeJSONParse } from "@/lib/utils";
 
 // 代码分割：黑板报组件（49KB）懒加载，减小 dashboard 初始 bundle
 const BlackboardSection = dynamic(() => import("@/components/blackboard-section"), {
@@ -156,10 +157,22 @@ interface SiblingTeam {
 export default function TeamDashboard() {
   // 页面滚动位置记忆
   useScrollPosition();
-  
+
 
   // 路由
   const router = useRouter();
+
+  // LE-F06: AbortController 防止组件卸载后 setState,以及取消重复请求
+  const loadAbortRef = useRef<AbortController | null>(null);
+
+  // LE-F06: 组件卸载时取消所有进行中的请求
+  useEffect(() => {
+    return () => {
+      if (loadAbortRef.current) {
+        loadAbortRef.current.abort();
+      }
+    };
+  }, []);
 
   const [team, setTeam] = useState<Team | null>(null);
   const [themes, setThemes] = useState<Theme[]>([]);
@@ -495,7 +508,7 @@ export default function TeamDashboard() {
     }
 
     try {
-      const teamObj = JSON.parse(teamData);
+      const teamObj = safeJSONParse(teamData, {} as any);
       
       // 规范化字段名：处理旧缓存数据（蛇形命名）和新数据（驼峰命名）
       const normalizedTeam: Team = {
@@ -535,17 +548,31 @@ export default function TeamDashboard() {
   // 加载小队数据
   const loadTeamData = async (teamObj: Team) => {
     try {
+      // LE-F06: 取消上一次未完成的请求,防止快速切换或卸载后 setState
+      if (loadAbortRef.current) {
+        loadAbortRef.current.abort();
+      }
+      const controller = new AbortController();
+      loadAbortRef.current = controller;
+
       // 并行加载主题、任务、未读消息、已完成主题、同志愿者其他小队
       // 传入createdBy参数，用于检查同一志愿者的其他小队已选择的主题
-      const themesUrl = teamObj.createdBy 
+      const themesUrl = teamObj.createdBy
         ? `/api/themes?teamId=${teamObj.id}&createdByVolunteer=${teamObj.createdBy}`
         : `/api/themes?teamId=${teamObj.id}`;
-      
+
       // 修复：使用 Promise.allSettled 替代 Promise.all，任一 fetch 失败不会导致整体中断
       const fetchSafe = async (url: string): Promise<Response> => {
         try {
-          return await fetch(url);
-        } catch (err) {
+          return await fetch(url, { signal: controller.signal });
+        } catch (err: any) {
+          // LE-F06: 主动 abort 不当作网络错误
+          if (err?.name === 'AbortError') {
+            return new Response(JSON.stringify({ error: 'aborted' }), {
+              status: 499,
+              headers: { 'Content-Type': 'application/json' },
+            });
+          }
           console.error(`Fetch 失败 ${url}:`, err);
           return new Response(JSON.stringify({ error: 'network_error' }), {
             status: 503,
@@ -618,7 +645,7 @@ export default function TeamDashboard() {
         const borrowedOverdueRecords = allRecords.filter((r: any) => r.type === 'borrowed' && r.is_overdue);
         try {
           const readHistoryIds: Set<string> = localStorage.getItem(`readBorrowHistoryIds_${teamObj.id}`)
-            ? new Set(JSON.parse(localStorage.getItem(`readBorrowHistoryIds_${teamObj.id}`)!))
+            ? new Set(safeGetJSON(`readBorrowHistoryIds_${teamObj.id}`, []))
             : new Set();
           // 待确认气泡：出借方收到的待确认请求数量
           // 借/还记录气泡：借入方的未读历史记录数量
@@ -634,7 +661,7 @@ export default function TeamDashboard() {
       if (transferData?.data) {
         try {
           const stored = localStorage.getItem(`readTransferIds_${teamObj.id}`);
-          const readIds: Set<string> = stored ? new Set(JSON.parse(stored)) : new Set();
+          const readIds: Set<string> = stored ? new Set(safeJSONParse(stored, [])) : new Set();
           const unreadReceived = transferData.data.filter((r: any) => !readIds.has(r.id));
           setReceivedTransferCount(unreadReceived.length);
         } catch {
@@ -1577,7 +1604,7 @@ export default function TeamDashboard() {
                     <div className="bg-gray-50 rounded-lg p-4 mb-4">
                       <h4 className="text-sm font-semibold mb-2">任务要求：</h4>
                       <ul className="text-sm text-gray-600 space-y-1">
-                        {(typeof currentTask.requirements === "string" ? JSON.parse(currentTask.requirements) : currentTask.requirements).map((req: string, idx: number) => (
+                        {(typeof currentTask.requirements === "string" ? safeJSONParse(currentTask.requirements, []) : currentTask.requirements).map((req: string, idx: number) => (
                           <li key={idx} className="flex items-start gap-2">
                             <span className="text-blue-500">•</span>
                             {req}

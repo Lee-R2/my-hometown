@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
+import { getSupabaseAdminClient } from '@/storage/database/supabase-client';
 import { hashPasswordAsync, verifyPasswordAsync, needsRehash, maskPhone } from '@/lib/security';
 import { safeError } from '@/lib/api-auth';
 import { checkRateLimit, logRequest, getClientIP } from '@/lib/rate-limit';
 import { createSession, setSessionCookie } from '@/lib/session';
 import { ApiErrors } from '@/lib/api-error';
 
-const supabase = getSupabaseClient();
+const supabase = getSupabaseAdminClient();
 
 // 家长登录
 export async function POST(request: NextRequest) {
@@ -37,7 +37,8 @@ export async function POST(request: NextRequest) {
 
     if (error || !parent) {
       if (error) return ApiErrors.validation('查询家长账号失败');
-      return ApiErrors.unauthorized('账号不存在');
+      // SEC-003: 统一错误消息,防止账号枚举
+      return ApiErrors.unauthorized('手机号或密码错误');
     }
 
     // 检查账号状态
@@ -79,8 +80,9 @@ export async function POST(request: NextRequest) {
     const isValidPassword = parent.password && await verifyPasswordAsync(password, parent.password);
 
     if (!isValidPassword) {
+      // SEC-003: 统一错误消息,防止账号枚举
       return NextResponse.json(
-        { success: false, error: '密码错误' },
+        { success: false, error: '手机号或密码错误' },
         { status: 401 }
       );
     }
@@ -138,6 +140,12 @@ export async function PUT(request: NextRequest) {
   const ip = getClientIP(request);
   const userAgent = request.headers.get('user-agent') || '';
 
+  // SEC-005: 注册接口加速率限制,防止批量注册
+  const rateLimitResult = await checkRateLimit(ip, 'register');
+  if (!rateLimitResult.allowed) {
+    return ApiErrors.rateLimited(rateLimitResult.message || '注册请求过于频繁,请稍后再试');
+  }
+
   try {
     const body = await request.json();
     const { phone, password, name, school_id, school_name, relation, child_name, child_grade } = body;
@@ -145,6 +153,12 @@ export async function PUT(request: NextRequest) {
     // 简化注册：只需手机号、密码、姓名
     if (!phone) {
       return ApiErrors.validation('请填写手机号');
+    }
+
+    // SEC-007: 手机号格式校验(中国大陆手机号: 1[3-9]开头,共11位数字)
+    const PHONE_REGEX = /^1[3-9]\d{9}$/;
+    if (!PHONE_REGEX.test(phone)) {
+      return ApiErrors.validation('请填写有效的手机号');
     }
 
     if (!password) {

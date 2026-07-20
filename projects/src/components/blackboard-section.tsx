@@ -176,6 +176,8 @@ export default function BlackboardSection({ teamId, teamCode }: { teamId: string
         page_size: '100',
       });
       const res = await fetch(`/api/team/blackboard?${params}`);
+      // 安全修复 LE-F04: 先检查 res.ok,避免服务端返回 HTML 错误页时 res.json() 抛 SyntaxError
+      if (!res.ok) return;
       const data = await res.json();
       if (data.success) {
         const allPosts: Post[] = data.data.posts || [];
@@ -197,6 +199,8 @@ export default function BlackboardSection({ teamId, teamCode }: { teamId: string
         page_size: '10',
       });
       const res = await fetch(`/api/team/blackboard?${params}`);
+      // 安全修复 LE-F04: 先检查 res.ok,避免服务端返回 HTML 错误页时 res.json() 抛 SyntaxError
+      if (!res.ok) return;
       const data = await res.json();
       if (data.success) {
         const newPosts = data.data.posts || [];

@@ -18,6 +18,7 @@ import {
   ArrowLeft, Loader2, CheckCircle, Clock, Users, Upload, Star, Send
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { safeJSONParse } from '@/lib/utils';
 
 interface Team {
   id: string;
@@ -110,8 +111,9 @@ function FinalTaskFeedbackPageContent() {
       return;
     }
 
-    const teamObj = JSON.parse(teamData);
+    const teamObj = safeJSONParse(teamData, null as any);
     setTeam(teamObj);
+    if (!teamObj) return;
 
     // 如果有指定成员ID，使用它；否则让用户选择
     if (memberId) {

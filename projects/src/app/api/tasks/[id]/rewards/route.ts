@@ -1,136 +1,70 @@
-import { requireAnyAuth, requireAdminOrVolunteer, authError, safeError } from '@/lib/api-auth';
 import { NextRequest, NextResponse } from 'next/server';
-import { getSupabaseClient } from '@/storage/database/supabase-client';
-import { supabaseErrorResponse, ApiErrors } from '@/lib/api-error';
+import { requireAnyAuth, authError } from '@/lib/api-auth';
 
-export async function GET(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const auth = requireAnyAuth(request);
+/**
+ * 数据同步状态接口
+ * 当前为 stub 实现：返回空状态，表示无更新
+ * 后续可扩展为基于 lastSync 时间戳查询各表变更数量
+ */
+
+export async function GET(request: NextRequest) {
+  // 安全:必须认证后才能查询同步状态,防止未授权用户枚举 teamId/userId 是否存在
+  const auth = await requireAnyAuth(request);
   if (!auth.authenticated) return authError(auth);
 
-  try {
-    const { id } = await params;
-    const client = getSupabaseClient();
+  const { searchParams } = new URL(request.url);
+  const teamId = searchParams.get('teamId');
+  const userId = searchParams.get('userId');
+  const userRole = searchParams.get('userRole');
+  const lastSync = searchParams.get('lastSync');
 
-    // 先获取任务关联的奖励ID
-    const { data: taskRewards, error: taskRewardError } = await client
-      .from('task_rewards')
-      .select('id, reward_id')
-      .eq('task_id', id);
-
-    if (taskRewardError) {
-      console.error('获取任务奖励关联失败:', taskRewardError);
-      return supabaseErrorResponse(taskRewardError, '获取任务奖励失败');
-    }
-
-    // 如果没有关联的奖励，返回空数组
-    if (!taskRewards || taskRewards.length === 0) {
-      return NextResponse.json({ rewards: [] });
-    }
-
-    // 获取奖励详情
-    const rewardIds = taskRewards.map(tr => tr.reward_id);
-    const { data: rewards, error: rewardsError } = await client
-      .from('rewards')
-      .select('id, name, description, icon, points, type, requirement')
-      .in('id', rewardIds);
-
-    if (rewardsError) {
-      console.error('获取奖励详情失败:', rewardsError);
-      return supabaseErrorResponse(rewardsError, '获取任务奖励失败');
-    }
-
-    // 组合数据
-    const result = (rewards || []).map(reward => {
-      const link = taskRewards.find(tr => tr.reward_id === reward.id);
-      return {
-        ...reward,
-        linkId: link?.id,
-      };
-    });
-
-    return NextResponse.json({ rewards: result });
-  } catch (error) {
-    console.error('获取任务奖励错误:', error);
-    return ApiErrors.validation('获取任务奖励失败');
+  // 基础校验（兼容团队端与管理员端两种调用方式）
+  if (!teamId && !userId) {
+    return NextResponse.json(
+      { success: false, error: '缺少 teamId 或 userId 参数' },
+      { status: 400 }
+    );
   }
-}
 
-// 更新任务的关联奖励
-export async function PUT(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  try {
-    const { id } = await params;
-    const body = await request.json();
-    const client = getSupabaseClient();
-
-    const { rewardIds } = body;
-
-    if (!Array.isArray(rewardIds)) {
-      return ApiErrors.validation('参数格式错误');
+  // 安全:校验查询参数与认证身份一致,防止枚举其他用户/小队
+  // admin/super_admin 可能查询任意小队/用户(管理后台用),其他角色只能查自己
+  const authRole = auth.payload!.role;
+  const authUserId = auth.payload!.userId;
+  if (authRole !== 'super_admin' && authRole !== 'admin') {
+    if (teamId && teamId !== authUserId) {
+      return NextResponse.json(
+        { success: false, error: '无权查询其他小队的同步状态' },
+        { status: 403 }
+      );
     }
-
-    // 先删除现有关联
-    await client
-      .from('task_rewards')
-      .delete()
-      .eq('task_id', id);
-
-    // 插入新关联
-    if (rewardIds.length > 0) {
-      const insertData = rewardIds.map(rewardId => ({
-        task_id: id,
-        reward_id: rewardId,
-      }));
-
-      const { error } = await client
-        .from('task_rewards')
-        .insert(insertData);
-
-      if (error) {
-        return supabaseErrorResponse(error, '更新任务奖励失败');
-      }
+    if (userId && userId !== authUserId) {
+      return NextResponse.json(
+        { success: false, error: '无权查询其他用户的同步状态' },
+        { status: 403 }
+      );
     }
-
-    return NextResponse.json({ success: true });
-  } catch (error) {
-    console.error('更新任务奖励错误:', error);
-    return ApiErrors.validation('更新任务奖励失败');
   }
-}
 
-// 删除任务的某个奖励关联
-export async function DELETE(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  try {
-    const { id } = await params;
-    const { searchParams } = new URL(request.url);
-    const rewardId = searchParams.get('rewardId');
-    const client = getSupabaseClient();
-
-    if (!rewardId) {
-      return ApiErrors.validation('缺少奖励ID');
-    }
-
-    const { error } = await client
-      .from('task_rewards')
-      .delete()
-      .eq('task_id', id)
-      .eq('reward_id', rewardId);
-
-    if (error) {
-      return supabaseErrorResponse(error, '删除关联失败');
-    }
-
-    return NextResponse.json({ success: true });
-  } catch (error) {
-    console.error('删除任务奖励关联错误:', error);
-    return ApiErrors.validation('删除关联失败');
-  }
+  // stub：返回空状态，表示当前无更新
+  // 真正的同步逻辑可基于 lastSync 时间戳查询各表 updated_at > lastSync 的记录数
+  return NextResponse.json({
+    success: true,
+    hasUpdates: false,
+    changes: [],
+    status: {
+      teams: 0,
+      tasks: 0,
+      submissions: 0,
+      rewards: 0,
+      skills: 0,
+      tools: 0,
+      messages: 0,
+      members: 0,
+      user_rewards: 0,
+      task_themes: 0,
+      team_side_tasks: 0,
+      permissions: 0,
+    },
+    serverTime: Date.now(),
+  });
 }

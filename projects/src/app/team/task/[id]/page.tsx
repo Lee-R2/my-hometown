@@ -15,6 +15,7 @@ import {
 import { toast } from 'sonner';
 import { useDataRefresh } from '@/hooks/use-data-refresh';
 import { useScrollPosition } from '@/hooks/use-scroll-position';
+import { safeGetJSON, safeJSONParse } from '@/lib/utils';
 
 interface Tool {
   id: string;
@@ -238,7 +239,7 @@ export default function TaskDetailPage() {
         fetchTaskDetail();
         
         // 更新本地存储的积分
-        const teamData = JSON.parse(localStorage.getItem('team') || '{}');
+        const teamData = safeGetJSON('team', {} as any);
         const updatedTeam = { 
           ...teamData, 
           points: (teamData.points || 0) + (data.pointsEarned || points) 
@@ -448,8 +449,8 @@ export default function TaskDetailPage() {
                   任务要求
                 </h4>
                 <ul className="space-y-1">
-                  {(typeof task.requirements === 'string' 
-                    ? JSON.parse(task.requirements) 
+                  {(typeof task.requirements === 'string'
+                    ? safeJSONParse(task.requirements, [])
                     : task.requirements).map((req: string, idx: number) => (
                     <li key={idx} className="text-sm text-gray-600 flex items-start gap-2">
                       <CheckCircle className="w-4 h-4 text-green-500 mt-0.5 shrink-0" />
